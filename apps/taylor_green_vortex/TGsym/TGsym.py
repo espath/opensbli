@@ -9,6 +9,21 @@ from opensbli import *
 import copy
 from opensbli.utilities.helperfunctions import substitute_simulation_parameters
 
+simulation_parameters = {
+'Re'        :   '800.0',
+'gama'      :   '1.4',
+'Minf'      :   '0.1',
+'Pr'        :   '0.71',
+'dt'        :   '0.005',
+'niter'     :   '4000',
+'block0np0'     :   '33',
+'block0np1'     :   '33',
+'block0np2'     :   '33',
+'Delta0block0'      :   'M_PI/(block0np0-1)',
+'Delta1block0'      :   'M_PI/(block0np1-1)',
+'Delta2block0'      :   'M_PI/(block0np2-1)',
+}
+
 # Number of dimensions of the system to be solved
 ndim = 3
 
@@ -114,10 +129,11 @@ initial.add_equations(initial_equations)
 # Create a schemes dictionary to be used for discretisation
 schemes = {}
 # Central scheme for spatial discretisation and add to the schemes dictionary
-cent = Central(4)
+cent = StoreSome(4, 'u0 u1 u2 T')
+# cent = Central(4)
 schemes[cent.name] = cent
 # RungeKutta scheme for temporal discretisation and add to the schemes dictionary
-rk = RungeKutta(3)
+rk = RungeKuttaLS(3)
 schemes[rk.name] = rk
 
 boundaries = []
@@ -146,12 +162,25 @@ block.discretise()
 # create an algorithm from the discretised computations
 alg = TraditionalAlgorithmRK(block)
 
+mixed_precision = False
 # set the simulation data type, for more information on the datatypes see opensbli.core.datatypes
-SimulationDataType.set_datatype(Double)
+if mixed_precision:
+    SimulationDataType.set_datatype(FloatC)
+    # Define custom precision options
+    # custom_arrays = [block.location_dataset(dset) for dset in ['p']]
+    # Create the dictionary of mixed precision options
+    mixed_precision_config = {
+    'q_vector' : ([], Double),
+    'RK_arrays' : ([], Double),
+    # 'residuals' : ([], Half),
+    # 'wk_arrays' : ([], Double),
+    # 'custom'   : (custom_arrays, Double),
+    }
+    OPSC(alg, mixed_precision_config=mixed_precision_config)
+else:
+    SimulationDataType.set_datatype(Double)
+    OPSC(alg)
 
-# Write the code for the algorithm
-OPSC(alg)
-
-constants = ['Re', 'gama', 'Minf', 'Pr', 'dt', 'niter', 'block0np0', 'block0np1', 'block0np2', 'Delta0block0', 'Delta1block0', 'Delta2block0']
-values = ['800.0', '1.4', '0.1', '0.71', '0.005', '4000', '33', '33', '33', 'M_PI/(block0np0-1)', 'M_PI/(block0np1-1)', 'M_PI/(block0np2-1)']
-substitute_simulation_parameters(constants, values)
+# Add the simulation constants to the OPS C code
+substitute_simulation_parameters(simulation_parameters.keys(), simulation_parameters.values())
+print_iteration_ops(NaN_check='rho')

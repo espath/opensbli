@@ -1,8 +1,22 @@
 #!/usr/bin/env python
 from opensbli import *
 import numpy as np
-from opensbli.utilities.helperfunctions import output_hdf5, substitute_simulation_parameters
+from opensbli.utilities.helperfunctions import substitute_simulation_parameters
 
+simulation_parameters = {
+'gama'      :   '1.4',
+'Minf'      :   '2.0',
+'dt'        :   '0.0001',
+'niter'     :   '50000',
+'block0np0'     :   '512',
+'block0np1'     :   '512',
+'Delta0block0'      :   '1.0/block0np0',
+'Delta1block0'      :   '1.0/block0np1',
+'TENO_CT'       :   '1e-5',
+'eps'       :   '1e-15',
+}
+
+# Define the problem
 ndim = 2
 # Specify TENO order and initialise characteristic scheme.
 sc1 = "**{\'scheme\':\'Weno\'}"
@@ -38,10 +52,10 @@ block = SimulationBlock(ndim, block_number=0)
 
 weno_order = 5
 Avg = RoeAverage([0, 1])
-LLF = LLFWeno(weno_order, formulation='Z', averaging=Avg)
+LF = LFWeno(weno_order, formulation='Z', averaging=Avg)
 
 schemes = {}
-schemes[LLF.name] = LLF
+schemes[LF.name] = LF
 rk = RungeKutta(3)
 schemes[rk.name] = rk
 
@@ -81,12 +95,25 @@ kwargs = {'iotype': "Write"}
 h5 = iohdf5(save_every=10000, **kwargs)
 h5.add_arrays(simulation_eq.time_advance_arrays)
 h5.add_arrays([DataObject('x0'), DataObject('x1')])
+block.setio([copy.deepcopy(h5)])
 
-# read the random numbers dataset from hdf5
-kwargs = {'iotype': "Read"}
-h5_read = iohdf5(**kwargs)
-h5_read.add_arrays([DataObject('random_nums')])
-block.setio([copy.deepcopy(h5), h5_read])
+# Random number generation for the initial condition
+add_random = True
+if add_random:
+    # read the random numbers dataset from hdf5
+    kwargs = {'iotype': "Read"}
+    h5_read = iohdf5(**kwargs)
+    h5_read.add_arrays([DataObject('random_nums')])
+    block.setio([h5_read])
+    from opensbli.utilities.helperfunctions import output_hdf5
+    # Change grid size here if desired
+    npoints = [512, 512]
+    halos = [(-5, 5), (-5, 5)]
+    size_including_halo = [npoints[i] + sum(np.absolute(halos[i])) for i in range(ndim)]
+
+    # Generate the initial white noise seeding
+    random_numbers = np.random.rand(*size_including_halo)
+    output_hdf5(random_numbers, name, halos, npoints, block)
 
 # Set equations on the block and discretise
 block.set_equations([constituent, initial, simulation_eq])
@@ -95,16 +122,6 @@ block.discretise()
 alg = TraditionalAlgorithmRK(block)
 SimulationDataType.set_datatype(Double)
 OPSC(alg)
-# Random number generation for the initial condition
-# Change grid size here if desired
-npoints = [512, 512]
-halos = [(-5, 5), (-5, 5)]
-size_including_halo = [npoints[i] + sum(np.absolute(halos[i])) for i in range(ndim)]
-
-# Generate the initial white noise seeding
-random_numbers = np.random.rand(*size_including_halo)
-output_hdf5(random_numbers, name, halos, npoints, block)
-
-constants = ['gama', 'Minf', 'dt', 'niter', 'block0np0', 'block0np1', 'Delta0block0', 'Delta1block0', 'TENO_CT', 'eps']
-values = ['1.4', '2.0', '0.0001', '50000', '512', '512', '1.0/block0np0', '1.0/block0np1', '1e-5', '1e-15']
-substitute_simulation_parameters(constants, values)
+# Add the simulation constants to the OPS C code
+substitute_simulation_parameters(simulation_parameters.keys(), simulation_parameters.values())
+print_iteration_ops(NaN_check='rho')

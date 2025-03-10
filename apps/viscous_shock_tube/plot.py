@@ -23,11 +23,11 @@ class plotFunctions(object):
         read_start = [abs(d) for d in d_m]
         read_end = [s-abs(d) for d, s in zip(d_m, size)]
         if len(read_end) == 1:
-            read_data = group["%s" % (dataset)].value[read_start[0]:read_end[0]]
+            read_data = group["%s" % (dataset)][read_start[0]:read_end[0]]
         elif len(read_end) == 2:
-            read_data = group["%s" % (dataset)].value[read_start[0]:read_end[0], read_start[1]:read_end[1]]
+            read_data = group["%s" % (dataset)][read_start[0]:read_end[0], read_start[1]:read_end[1]]
         elif len(read_end) == 3:
-            read_data = group["%s" % (dataset)].value[read_start[0]:read_end[0], read_start[1]:read_end[1], read_start[2]:read_end[2]]
+            read_data = group["%s" % (dataset)][read_start[0]:read_end[0], read_start[1]:read_end[1], read_start[2]:read_end[2]]
         else:
             raise NotImplementedError("")
         return read_data
@@ -48,7 +48,7 @@ class Plot(plotFunctions):
 
     def line_graphs(self, x, variables, names):
         for i, name in enumerate(names):
-            if name is 'Reference':
+            if name == 'Reference':
                 plt.plot(x[i], variables[i], label=labels[i], color=colors[i], linestyle='--')
             else:
                 plt.plot(x[i], variables[i], label=labels[i], color=colors[i])
@@ -112,7 +112,7 @@ class Plot(plotFunctions):
 labels = ['OpenSBLI', 'Reference']
 colors = ['k', 'r']
 Re = 200
-# directory = "./Re%d/" % Re
+directory = './'
 fname = "opensbli_output.h5"
 PC = Plot()
 PC.main_plot(directory + fname, 22)

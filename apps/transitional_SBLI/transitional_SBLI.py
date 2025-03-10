@@ -6,18 +6,43 @@ from opensbli.utilities.helperfunctions import substitute_simulation_parameters,
 from opensbli.utilities.oblique_shock import ShockConditions
 from sympy import tan, pi, tanh, sinh, cosh, exp, cos, sin
 import time_averaging
-# settings to turn on statistics gathering & read from restart file
+
+simulation_parameters = {
+'gama'      :   '1.4',
+'Minf'      :   '1.5',
+'Pr'        :   '0.72',
+'Re'        :   '750.0',
+'Twall'     :   '1.3809973268575328',
+'dt'        :   '0.025',
+'niter'     :   '300000',
+'block0np0'     :   '500',
+'block0np1'     :   '200',
+'block0np2'     :   '100',
+'Delta0block0'      :   '375.0/(block0np0-1)',
+'Delta1block0'      :   '140.0/(block0np1-1)',
+'Delta2block0'      :   '27.32/(block0np2)',
+'SuthT'     :   '110.4',
+'RefT'      :   '202.17',
+'eps'       :   '1e-30',
+'Lx1'       :   '140.0',
+'by'        :   '5.0',
+'A'     :   '2.5e-3',
+'bta'       :   '0.23',
+'omega'     :   '0.1011',
+'xF'        :   '20.0',
+'yF'        :   '4.0',
+'teno_a1'       :   '9.5',
+'teno_a2'       :   '3.5',
+'epsilon'       :   '1.0e-16',
+}
+
+# settings to turn on statistics gathering 
 stats = True
-restart = True
 stats_class = []
 if stats:
     stats_class = time_averaging.get_stats_classes()
 
-# Declare constant values
-restart_iteration_no = symbols("restart_iteration_no", **{'cls': ConstantObject})
-restart_iteration_no.datatype = Int()
-CTD.add_constant([restart_iteration_no])
-
+# Define the problem
 ndim = 3
 sc1 = "**{\'scheme\':\'Teno\'}"
 # Define the compresible Navier-Stokes equations in Einstein notation.
@@ -64,9 +89,9 @@ shock_sensor, sensor_array = SS.ducros_equations(block, coordinate_symbol, metri
 store_sensor = True
 teno_order = 6
 Avg = RoeAverage([0, 1])
-LLF = LLFTeno(teno_order, formulation='adaptive', averaging=Avg, sensor=sensor_array, store_sensor=store_sensor)
+LF = LFTeno(teno_order, formulation='adaptive', averaging=Avg, sensor=sensor_array, store_sensor=store_sensor)
 schemes = {}
-schemes[LLF.name] = LLF
+schemes[LF.name] = LF
 fns = 'u0 u1 u2'
 cent = StoreSome(4, fns)
 schemes[cent.name] = cent
@@ -180,10 +205,6 @@ block.discretise()
 alg = TraditionalAlgorithmRK(block)
 SimulationDataType.set_datatype(Double)
 OPSC(alg)
-# Substitute the simulation parameters
-constants = ['gama', 'Minf', 'Pr', 'Re', 'Twall', 'dt', 'niter', 'block0np0', 'block0np1', 'block0np2',
-             'Delta0block0', 'Delta1block0', 'Delta2block0', 'SuthT', 'RefT', 'eps', 'Lx1', 'by', 'A', 'bta', 'omega', 'xF', 'yF', 'teno_a1', 'teno_a2', 'epsilon', 'restart_iteration_no']
-values = ['1.4', '1.5', '0.72', '750.0', '1.3809973268575328', '0.025', '300000', '500', '200', '100',
-          '375.0/(block0np0-1)', '140.0/(block0np1-1)', '27.32/(block0np2)', '110.4', '202.17', '1e-30', '140.0', '5.0', '2.5e-3', '0.23', '0.1011', '20.0', '4.0', '9.5', '3.5', '1.0e-16', '0']
-substitute_simulation_parameters(constants, values)
-print_iteration_ops()
+# Add the simulation constants to the OPS C code
+substitute_simulation_parameters(simulation_parameters.keys(), simulation_parameters.values())
+print_iteration_ops(NaN_check='rho')

@@ -4,6 +4,15 @@ from opensbli import *
 import copy
 from opensbli.utilities.helperfunctions import substitute_simulation_parameters
 
+# Input parameters for the simulation
+simulation_parameters = {
+    "c0"                   : "0.5",
+    "dt"                   : "0.001",
+    "niter"                : "1.0/0.001",
+    "block0np0"            : "200",
+    "Delta0block0"         : "1.0/block0np0",
+}
+
 # Problem dimension
 ndim = 1
 
@@ -47,7 +56,7 @@ phi = parse_expr("Eq(DataObject(phi), sin(2.0*pi*DataObject(x0)))", local_dict=l
 initial = GridBasedInitialisation()
 initial.add_equations([x0, phi])
 
-kwargs = {'iotype': "Write"}
+kwargs = {'iotype': "Write", 'write_constants': True}
 output_arrays = simulation_eq.time_advance_arrays + [DataObject('x0')]
 h5 = iohdf5(arrays=output_arrays, **kwargs)
 
@@ -68,8 +77,8 @@ block.discretise()
 # Algorithm for the block
 alg = TraditionalAlgorithmRK(block)
 SimulationDataType.set_datatype(Double)
-OPSC(alg)
+OPSC(alg, OPS_V2=True)
+# Add the simulation constants to the OPS C code
+substitute_simulation_parameters(simulation_parameters.keys(), simulation_parameters.values())
+print_iteration_ops(NaN_check='phi', every=100)
 
-constants = ['c0', 'dt', 'niter', 'block0np0', 'Delta0block0']
-values = ['0.5', '0.001', '1.0/0.001', '200', '1.0/block0np0']
-substitute_simulation_parameters(constants, values)

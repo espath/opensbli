@@ -4,64 +4,107 @@ from opensbli import *
 import copy
 from opensbli.utilities.helperfunctions import substitute_simulation_parameters
 
+simulation_parameters = {
+'gama'      :       '1.4',
+'Minf'      :       '2.0',
+'dt'        :       '0.1',
+'niter'     :       '10000',
+'block0np0'     :       '457',
+'block0np1'     :       '255',
+'Delta0block0'      :       '350.0/(block0np0-1)',
+'Delta1block0'      :       '115.0/(block0np1-1)',
+'TENO_CT'           : '1.0e-6',
+'lambda0_TVD'       : 'dt/Delta0block0',
+'lambda1_TVD'       : 'dt/Delta1block0',
+'inv_rfact0_block0' : '1.0/Delta0block0',
+'inv_rfact1_block0' : '1.0/Delta1block0',
+}
+
+# Direct application of shock-capturing scheme, otherwise central scheme with filter-step example
+weno = False
+teno = False
+TVD = False
 ndim = 2
-
-sc1 = "**{\'scheme\':\'Weno\'}"
-# Define the compresible Navier-Stokes equations in Einstein notation.
-a = "Conservative(rhou_j,x_j,%s)" % sc1
-mass = "Eq(Der(rho,t), - %s)" % (a)
-a = "Conservative(rhou_i*u_j + KD(_i,_j)*p,x_j , %s)" % sc1
-momentum = "Eq(Der(rhou_i,t) , -%s  )" % (a)
-a = "Conservative((p+rhoE)*u_j,x_j, %s)" % sc1
-energy = "Eq(Der(rhoE,t), - %s  )" % (a)
-# Substitutions
-substitutions = []
-
 # Define all the constants in the equations
 constants = ["gama", "Minf"]
-
 # Define coordinate direction symbol (x) this will be x_i, x_j, x_k
 coordinate_symbol = "x"
+# Substitutions
+conservative = True
+substitutions = []
+eq = EinsteinEquation()
 
-# Formulas for the variables used in the equations
-velocity = "Eq(u_i, rhou_i/rho)"
-pressure = "Eq(p, (gama-1)*(rhoE - rho*(1/2)*(KD(_i,_j)*u_i*u_j)))"
+if weno or teno:
+    if weno:
+        sc1 = "**{\'scheme\':\'Weno\'}"
+    else:
+        sc1 = "**{\'scheme\':\'Teno\'}"
+
+    # Define the compresible Navier-Stokes equations in Einstein notation.
+    a = "Conservative(rhou_j,x_j,%s)" % sc1
+    mass = "Eq(Der(rho,t), - %s)" % (a)
+    a = "Conservative(rhou_i*u_j + KD(_i,_j)*p,x_j , %s)" % sc1
+    momentum = "Eq(Der(rhou_i,t) , -%s  )" % (a)
+    a = "Conservative((p+rhoE)*u_j,x_j, %s)" % sc1
+    energy = "Eq(Der(rhoE,t), - %s  )" % (a)
+
+    mass = eq.expand(mass, ndim, coordinate_symbol, substitutions, constants)
+    momentum = eq.expand(momentum, ndim, coordinate_symbol, substitutions, constants)
+    energy = eq.expand(energy, ndim, coordinate_symbol, substitutions, constants)
+else:
+    NS = NS_Split('Feiereisen', ndim, constants, coordinate_symbol=coordinate_symbol, conservative=conservative, viscosity='inviscid', energy_formulation='enthalpy', debug=False)
+    mass, momentum, energy = NS.mass, NS.momentum, NS.energy
+
+# Expand the simulation equations, for this create a simulation equations class
+simulation_eq = SimulationEquations()
+simulation_eq.add_equations(mass)
+simulation_eq.add_equations(momentum)
+simulation_eq.add_equations(energy)
+
+# Constituent relations
+if conservative:
+    pressure = "Eq(p, (gama-1)*(rhoE - (1/2)*rho*(KD(_i,_j)*u_i*u_j)))"
+    velocity = "Eq(u_i, rhou_i/rho)"
+    enthalpy = "Eq(H, (rhoE + p) / rho)"
+else:
+    pressure = "Eq(p, rho*(gama-1)*(Et - (1/2)*(KD(_i,_j)*u_i*u_j)))"
+    enthalpy = "Eq(H, Et + p / rho)"
+
 speed_of_sound = "Eq(a, (gama*p/rho)**0.5)"
 
-simulation_eq = SimulationEquations()
-eq = EinsteinEquation()
-eqns = eq.expand(mass, ndim, coordinate_symbol, substitutions, constants)
-
-simulation_eq.add_equations(eqns)
-
-eqns = eq.expand(momentum, ndim, coordinate_symbol, substitutions, constants)
-simulation_eq.add_equations(eqns)
-
-eqns = eq.expand(energy, ndim, coordinate_symbol, substitutions, constants)
-simulation_eq.add_equations(eqns)
 
 constituent = ConstituentRelations()
 eqns = eq.expand(velocity, ndim, coordinate_symbol, substitutions, constants)
 constituent.add_equations(eqns)
-
 eqns = eq.expand(pressure, ndim, coordinate_symbol, substitutions, constants)
 constituent.add_equations(eqns)
-
 eqns = eq.expand(speed_of_sound, ndim, coordinate_symbol, substitutions, constants)
 constituent.add_equations(eqns)
-
-schemes = {}
-weno_order = 5
-# Averaging procedure to be used for the eigen system evaluation
-Avg = SimpleAverage([0, 1])
-# LLF scheme
-LLF = LLFWeno(weno_order, formulation='Z', averaging=Avg)
-# Add to schemes
-schemes[LLF.name] = LLF
-rk = RungeKuttaLS(3)
-schemes[rk.name] = rk
-
+eqns = eq.expand(enthalpy, ndim, coordinate_symbol, substitutions, constants)
+constituent.add_equations(eqns)
+# Make a simulation block
 block = SimulationBlock(ndim, block_number=0)
+schemes = {}
+# Spatial scheme
+if weno:
+    Avg = SimpleAverage([0, 1])
+    # LF = LFWeno(order=7, formulation='Z', averaging=Avg, flux_type='LLF')
+    LF = HLLCWeno(order=5, formulation='Z', averaging=Avg, flux_type='HLLC-LM')
+    # Add to schemes
+    schemes[LF.name] = LF
+elif teno:
+    Avg = SimpleAverage([0, 1])
+    LF = LFTeno(order=5, averaging=Avg, flux_type='GLF')
+    # LF = HLLCTeno(order=6, averaging=Avg, flux_type='HLLC-LM')
+    # Add to schemes
+    schemes[LF.name] = LF    
+else:
+    fns = 'u0 u1'
+    cent = StoreSome(4, fns)
+    schemes[cent.name] = cent
+# Time-stepping
+rk = RungeKuttaLS(3, formulation='SSP')
+schemes[rk.name] = rk
 
 
 local_dict = {"block": block, "GridVariable": GridVariable, "DataObject": DataObject}
@@ -70,14 +113,10 @@ for con in constants:
 # Initial conditions
 x0 = parse_expr("Eq(DataObject(x0), block.deltas[0]*block.grid_indexes[0])", local_dict=local_dict)
 x1 = parse_expr("Eq(DataObject(x1), block.deltas[1]*block.grid_indexes[1])", local_dict=local_dict)
-
-
 d_in = parse_expr("Eq(GridVariable(d), 1.0)", local_dict=local_dict)
 u0_in = parse_expr("Eq(GridVariable(u0), 1.0)", local_dict=local_dict)
 u1_in = parse_expr("Eq(GridVariable(u1), 0.0)", local_dict=local_dict)
 p_in = parse_expr("Eq(GridVariable(p), 1.0/(gama*Minf**2.0))", local_dict=local_dict)  # p = 1/(gama*Minf^2)
-
-
 rho = parse_expr("Eq(DataObject(rho), d)", local_dict=local_dict)
 rhou0 = parse_expr("Eq(DataObject(rhou0), d*u0)", local_dict=local_dict)
 rhou1 = parse_expr("Eq(DataObject(rhou1), d*u1)", local_dict=local_dict)
@@ -125,15 +164,25 @@ p = parse_expr(p, local_dict=local_dict)
 
 upper_eqns = [x, shock_loc, d, u0, u1, p, rho, rhou0, rhou1, rhoE]
 boundaries[direction][side] = DirichletBC(direction, side, upper_eqns)
-
 block.set_block_boundaries(boundaries)
+
 
 kwargs = {'iotype': "Write"}
 h5 = iohdf5(**kwargs)
 h5.add_arrays(simulation_eq.time_advance_arrays)
 h5.add_arrays([DataObject('x0'), DataObject('x1')])
-block.setio(copy.deepcopy(h5))
 
+# WENO/TVD filter if not using direct application of WENO/TENO
+if not weno and not teno:
+    if TVD:
+        TVD_filter = TVDFilter(block, airfoil=False)
+        block.set_equations(TVD_filter.equation_classes)
+    else:
+        WF = WENOFilter(block, order=5, formulation='Z', flux_type='LLF', airfoil=False, optimize=True)
+        block.set_equations(WF.equation_classes)
+        h5.add_arrays([DataObject('WENO_filter'), DataObject('kappa')])
+
+block.setio(copy.deepcopy(h5))
 block.set_equations([copy.deepcopy(constituent), copy.deepcopy(simulation_eq), initial])
 block.set_discretisation_schemes(schemes)
 
@@ -142,6 +191,7 @@ block.discretise()
 alg = TraditionalAlgorithmRK(block)
 SimulationDataType.set_datatype(Double)
 OPSC(alg)
-constants = ['gama', 'Minf', 'dt', 'niter', 'block0np0', 'block0np1', 'Delta0block0', 'Delta1block0']
-values = ['1.4', '2.0', '0.1', '10000', '457', '255', '350.0/(block0np0-1)', '115.0/(block0np1-1)']
-substitute_simulation_parameters(constants, values)
+# Add the simulation constants to the OPS C code
+substitute_simulation_parameters(simulation_parameters.keys(), simulation_parameters.values())
+print_iteration_ops(NaN_check='rho')
+

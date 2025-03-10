@@ -20,13 +20,13 @@ def plot(path):
     # Read in the simulation output
     dump = glob.glob(path + "/opensbli_output.h5")
     if not dump or len(dump) > 1:
-        print "Error: No dump file found, or more than one dump file found."
+        print("Error: No dump file found, or more than one dump file found.")
         sys.exit(1)
     f = h5py.File(dump[-1], 'r')
     group = f["opensbliblock00"]
 
-    phi = group["phi_B0"].value
-    x = group["x0_B0"].value
+    phi = group["phi_B0"]
+    x = group["x0_B0"]
 
     # Ignore the 2 halo nodes at either end of the domain
     phi = phi[halo:nx+halo]

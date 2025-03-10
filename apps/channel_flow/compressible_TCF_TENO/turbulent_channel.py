@@ -5,6 +5,30 @@ from sympy import sin, log, cos, pi, tanh
 from opensbli.utilities.helperfunctions import substitute_simulation_parameters, print_iteration_ops
 
 # STEP 0 Create the equations required for the numerical solution
+simulation_parameters = {
+'Re'        :   '190.71',
+'gama'      :   '1.4',
+'Minf'      :   '0.0955',
+'Pr'        :   '0.7',
+'Twall'     :   '1.0',
+'dt'        :   '0.0002',
+'niter'     :   '250000',
+'block0np0'     :   '129',
+'block0np1'     :   '129',
+'block0np2'     :   '129',
+'Delta0block0'      :   '4.0*M_PI/block0np0',
+'Delta1block0'      :   '2.0/(block0np1-1)',
+'Delta2block0'      :   '(4.0*M_PI/3.0)/block0np2',
+"c0"        :   '-1',
+"c1"        :   '0',
+"c2"        :   '0',
+"lx0"       :   "4.0*M_PI",
+"lx2"       :   "(4.0*M_PI/3.0)",
+"stretch"       :   "1.7",
+'harten'        :   '0.25',
+'TENO_CT'       :   '1e-7',
+'eps'       :   '1e-15',
+}
 # Problem dimension
 ndim = 3
 stats = True
@@ -212,9 +236,9 @@ block.set_equations([constituent, simulation_eq, initial, metriceq] + stat_equat
 # Create the dictionary of schemes
 weno_order = 6
 Avg = RoeAverage([0, 1])
-LLF = LLFTeno(weno_order, averaging=Avg)
+LF = LFTeno(weno_order, averaging=Avg)
 schemes = {}
-schemes[LLF.name] = LLF
+schemes[LF.name] = LF
 fns = 'u0 u1 u2 T'
 cent = StoreSome(4, fns)
 schemes[cent.name] = cent
@@ -260,11 +284,6 @@ SimulationDataType.set_datatype(Double)
 OPSC(alg)
 
 # STEP 10
-# Populate the values of the constants like Re, Pr etc and the number of points for the
-# simulation etc. In the future reading thes from HDF5 would be provided
-constants = ['Re', 'gama', 'Minf', 'Pr', 'Twall', 'dt', 'niter', 'block0np0', 'block0np1',
-    'block0np2', 'Delta0block0', 'Delta1block0', 'Delta2block0', "c0", "c1", "c2", "lx0", "lx2", "stretch", 'harten', 'TENO_CT', 'eps']
-values = ['190.71', '1.4', '0.0955', '0.7', '1.0', '0.0002', '250000', '129', '129', '129',
-    '4.0*M_PI/block0np0', '2.0/(block0np1-1)', '(4.0*M_PI/3.0)/block0np2', '-1', '0', '0', "4.0*M_PI", "(4.0*M_PI/3.0)", "1.7", '0.25', '1e-7', '1e-15']
-substitute_simulation_parameters(constants, values)
+# Add the simulation constants to the OPS C code
+substitute_simulation_parameters(simulation_parameters.keys(), simulation_parameters.values())
 print_iteration_ops()

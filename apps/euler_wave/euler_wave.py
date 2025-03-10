@@ -4,8 +4,19 @@ from opensbli import *
 import copy
 from opensbli.utilities.helperfunctions import substitute_simulation_parameters
 
-ndim = 2
 
+simulation_parameters = {
+'gama'      :   '1.4',  
+'dt'        :   '0.001',    
+'niter'     :   '2500', 
+'block0np0'     :   '400',  
+'block0np1'     :   '400',  
+'Delta0block0'      :   '2.0/(block0np0)',  
+'Delta1block0'      :   '2.0/(block0np1)',  
+}
+
+# Define the problem
+ndim = 2
 sc1 = "**{\'scheme\':\'Weno\'}"
 # Define the compresible Navier-Stokes equations in Einstein notation.
 a = "Conservative(rhou_j,x_j,%s)" % sc1
@@ -56,9 +67,9 @@ weno_order = 5
 # Averaging procedure to be used for the eigen system evaluation
 Avg = SimpleAverage([0, 1])
 # LLF scheme
-LLF = LLFWeno(weno_order, formulation='Z', averaging=Avg)
+LF = LFWeno(weno_order, formulation='Z', averaging=Avg)
 # Add to schemes
-schemes[LLF.name] = LLF
+schemes[LF.name] = LF
 rk = RungeKutta(3)
 schemes[rk.name] = rk
 
@@ -109,6 +120,7 @@ block.discretise()
 alg = TraditionalAlgorithmRK(block)
 SimulationDataType.set_datatype(Double)
 OPSC(alg)
-constants = ['gama', 'dt', 'niter', 'block0np0', 'block0np1', 'Delta0block0', 'Delta1block0']
-values = ['1.4', '0.001', '2500', '400', '400', '2.0/(block0np0)', '2.0/(block0np1)']
-substitute_simulation_parameters(constants, values)
+# Add the simulation constants to the OPS C code
+substitute_simulation_parameters(simulation_parameters.keys(), simulation_parameters.values())
+print_iteration_ops(NaN_check='rho')
+

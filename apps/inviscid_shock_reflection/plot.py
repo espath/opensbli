@@ -36,9 +36,9 @@ class plotFunctions(object):
         read_start = [abs(d) for d in d_m]
         read_end = [s-abs(d) for d, s in zip(d_m, size)]
         if len(read_end) == 2:
-            read_data = group["%s" % (dataset)].value[read_start[0]:read_end[0], read_start[1]:read_end[1]]
+            read_data = group["%s" % (dataset)][read_start[0]:read_end[0], read_start[1]:read_end[1]]
         elif len(read_end) == 3:
-            read_data = group["%s" % (dataset)].value[read_start[0]:read_end[0], read_start[1]:read_end[1], read_start[2]:read_end[2]]
+            read_data = group["%s" % (dataset)][read_start[0]:read_end[0], read_start[1]:read_end[1], read_start[2]:read_end[2]]
         else:
             raise NotImplementedError("")
         return read_data
@@ -66,17 +66,20 @@ class Plot(plotFunctions):
         rhou = self.read_dataset(group, "rhou0_B0")
         rhov = self.read_dataset(group, "rhou1_B0")
         rhoE = self.read_dataset(group, "rhoE_B0")
+        kappa = self.read_dataset(group, "kappa_B0")
+        WENO_filter = self.read_dataset(group, "WENO_filter_B0")
+
         u = rhou/rho
         v = rhov/rho
         p = (0.4)*(rhoE - 0.5*(u**2+v**2)*rho)
-        return rho, u, v, rhoE, p
+        return rho, u, v, rhoE, p, kappa, WENO_filter
 
     def main_plot(self, fname, n_levels):
         f, group1 = self.read_file(fname)
         self.x, self.y = self.extract_coordinates()
-        rho, u, v, rhoE, p = self.extract_flow_variables(group1)
-        variables = [rho, u, v, rhoE, p]
-        names = ["rho", "u", "v", "rho E", "P"]
+        rho, u, v, rhoE, p, kappa, WENO_filter= self.extract_flow_variables(group1)
+        variables = [rho, u, v, rhoE, p, kappa, WENO_filter]
+        names = ["rho", "u", "v", "rho E", "P", "kappa", "WENO_filter"]
 
         # Contour plots
         for var, name in zip(variables, names):
@@ -87,13 +90,13 @@ class Plot(plotFunctions):
             print(levels)
             fig = plt.figure()
             self.contour_local(fig, levels, "%s" % name, var)
-            plt.savefig(directory + "output_%s.pdf" % name, bbox_inches='tight')
+            plt.savefig(directory + "output_%s.png" % name, dpi=250, bbox_inches='tight')
             plt.clf()
         f.close()
 
 
 fname = "opensbli_output.h5"
-n_contour_levels = 25
+n_contour_levels = 15
 directory = './simulation_plots/'
 
 if not os.path.exists(directory):

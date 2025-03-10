@@ -23,4 +23,4 @@ OPS_FILES = opensbli.cpp
 APP=opensbli
 MAIN_SRC=opensbli
 
-include $(OPS_INSTALL_PATH)/../makefiles/Makefile.c_app
+include $(OPS_INSTALL_PATH)/../makefiles/Makefile.c_app_legacy

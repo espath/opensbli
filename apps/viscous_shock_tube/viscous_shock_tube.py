@@ -5,6 +5,24 @@ from opensbli.utilities.helperfunctions import substitute_simulation_parameters,
 
 """ Viscous shock tube problem in 2D, conditions taken from Numerical simulation of the viscous shock tube problem
 by using a high resolution monotonicity-preserving scheme. Tenaud et al (2009). doi:10.1016/j.compfluid.2008.06.008. """
+
+simulation_parameters = {
+'mu'        :   '1.0',
+'gama'      :   '1.4',
+'Minf'      :   '1.0',
+'Pr'        :   '0.73',
+'Re'        :   '200.0',
+'dt'        :   '0.000005',
+'niter'     :   '200000',
+'block0np0'     :   '500',
+'block0np1'     :   '250',
+'Delta0block0'      :   '1.0/(block0np0-1)',
+'Delta1block0'      :   '0.5/(block0np1-1)',
+'eps'       :   '1e-15',
+'TENO_CT'       :   '1e-6',
+}
+
+# Define the problem
 ndim = 2
 sc1 = "**{\'scheme\':\'Teno\'}"
 # Define the compresible Navier-Stokes equations in Einstein notation.
@@ -39,9 +57,9 @@ block = SimulationBlock(ndim, block_number=0)
 
 teno_order = 5
 Avg = RoeAverage([0, 1])
-LLF = LLFTeno(teno_order, averaging=Avg)
+LF = LFTeno(teno_order, averaging=Avg)
 schemes = {}
-schemes[LLF.name] = LLF
+schemes[LF.name] = LF
 fns = 'u0 u1 u2'
 cent = StoreSome(4, fns)
 schemes[cent.name] = cent
@@ -110,9 +128,6 @@ block.discretise()
 alg = TraditionalAlgorithmRK(block)
 SimulationDataType.set_datatype(Double)
 OPSC(alg)
-constants = ['mu', 'gama', 'Minf', 'Pr', 'Re', 'dt', 'niter', 'block0np0', 'block0np1',
-             'Delta0block0', 'Delta1block0', 'eps', 'TENO_CT']
-values = ['1.0', '1.4', '1.0', '0.73', '200.0', '0.000005', '200000', '500', '250',
-          '1.0/(block0np0-1)', '0.5/(block0np1-1)', '1e-15', '1e-6']
-substitute_simulation_parameters(constants, values)
-print_iteration_ops(NaN_check='rho_B0')
+# Add the simulation constants to the OPS C code
+substitute_simulation_parameters(simulation_parameters.keys(), simulation_parameters.values())
+print_iteration_ops(NaN_check='rho')

@@ -36,9 +36,9 @@ class plotFunctions(object):
         read_start = [abs(d) for d in d_m]
         read_end = [s-abs(d) for d, s in zip(d_m, size)]
         if len(read_end) == 2:
-            read_data = group["%s" % (dataset)].value[read_start[0]:read_end[0], read_start[1]:read_end[1]]
+            read_data = group["%s" % (dataset)][read_start[0]:read_end[0], read_start[1]:read_end[1]]
         elif len(read_end) == 3:
-            read_data = group["%s" % (dataset)].value[read_start[0]:read_end[0], read_start[1]:read_end[1], read_start[2]:read_end[2]]
+            read_data = group["%s" % (dataset)][read_start[0]:read_end[0], read_start[1]:read_end[1], read_start[2]:read_end[2]]
         else:
             raise NotImplementedError("")
         return read_data
@@ -90,13 +90,13 @@ class Plot(plotFunctions):
             plt.savefig(directory + "output_%s.pdf" % name, bbox_inches='tight')
             plt.clf()
 
-        # Constant values for exact solution
+        # Constants for exact solution
         v_const = -0.5
         u_const = 1.0
         t = 2.5
         exact = 1.0 + 0.2*numpy.sin(numpy.pi*(self.x+self.y - t*(u_const+v_const)))
         npoints = numpy.shape(exact)
-        print numpy.shape(exact)
+        print(numpy.shape(exact))
 
         rho_error = numpy.abs(exact - rho)
         L1 = numpy.sum(rho_error)/(npoints[0]*npoints[1])
@@ -106,9 +106,9 @@ class Plot(plotFunctions):
         text_file.write("L1, Linf\n")
         text_file.write("%e, %e" % (L1, Linf))
         text_file.close()
-        print "=================================="
-        print "L^1 error: %e " % L1
-        print "L_inf error: %e " % Linf
+        print("==================================")
+        print("L^1 error: %e " % L1)
+        print("L_inf error: %e " % Linf)
         f.close()
 
 
