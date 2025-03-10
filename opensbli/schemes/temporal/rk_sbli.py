@@ -17,34 +17,51 @@ class RungeKutta(Scheme):
     """ Applies a Runge-Kutta time-stepping scheme.
 
         :arg int order: The order of accuracy of the scheme."""
-    def __init__(cls, order, constant_dt=None):
+    def __init__(cls, order, stages=3, constant_dt=None):
         Scheme.__init__(cls, "RungeKutta", order)
-        if order is not 3:
-            raise NotImplementedError("This Runge-Kutta scheme is only defined for 3rd order. For 4th order please use the RungeKuttaLS class instead.")
+        cls.solution = {}
+        cls.stages, cls.order = stages, order
         cls.schemetype = "Temporal"
-        cls.nloops = 2
-        cls.stage = Idx('stage', order)
-        cls.solution_coeffs = ConstantIndexed('rkold', cls.stage)
-        cls.stage_coeffs = ConstantIndexed('rknew', cls.stage)
+        # Create constants
+        cls.create_constants(stages, order)
         # Update coefficient values
         cls.get_coefficients
-        niter_symbol = ConstantObject('niter', integer=True)
-        niter_symbol.datatype = Int()
+        cls.add_constants()
+        if order != 3:
+            raise NotImplementedError("This Runge-Kutta scheme is only defined for 3rd order. For 4th order please use the RungeKuttaLS class instead.")
+        print("A Runge-Kutta scheme of order %d is being used for time-stepping." % order)
+        return
+
+    def create_constants(cls, n_stages, order):
+        cls.stage = Idx('stage', n_stages)
+        cls.solution_coeffs = ConstantIndexed('rkold', cls.stage)
+        cls.stage.restart = None
+        cls.stage_coeffs = ConstantIndexed('rknew', cls.stage)
+        cls.niter_symbol = ConstantObject('niter', integer=True)
+        cls.niter_symbol.datatype = Int()
         cls.iteration_number = Globalvariable("iter", integer=True)
         cls.iteration_number._value = None
         cls.iteration_number.datatype = Int()
         # As iteration number is used in a for loop we dont add them to constants to declare
-        cls.temporal_iteration = Idx(cls.iteration_number, niter_symbol)
-        CTD.add_constant(niter_symbol)
+        cls.temporal_iteration = Idx(cls.iteration_number, cls.niter_symbol)
+        cls.constant_time_step = True
+        cls.time_step = ConstantObject("dt")
+        # Variables to hold the simulation time and starting iteration
+        cls.start_time = ConstantObject('simulation_time', restart=True)
+        cls.start_time.value = 0.0
+        cls.start_iter = ConstantObject('start_iter', integer=True, restart=True)
+        cls.start_iter.value = 0
+        cls.start_iter.datatype = Int()
+        cls.temporal_iteration.restart = cls.start_iter
+        return
+
+    def add_constants(cls):
+        CTD.add_constant(cls.niter_symbol)
         CTD.add_constant(cls.solution_coeffs)
         CTD.add_constant(cls.stage_coeffs)
-        cls.solution = {}
-        if constant_dt:
-            raise NotImplementedError("")
-        else:
-            cls.constant_time_step = True
-        cls.time_step = ConstantObject("dt")
         CTD.add_constant(cls.time_step)
+        CTD.add_constant(cls.start_time)
+        CTD.add_constant(cls.start_iter)
         return
 
     @property
@@ -83,7 +100,8 @@ class RungeKutta(Scheme):
             old_data_sets = cls.create_old_data_sets(td_fns, block)
             new_data_sets = [eq.time_advance_array for eq in td_fns]
             zipped = zip(old_data_sets, new_data_sets)
-
+            cls.var_solved = new_data_sets
+            cls.temp_RK_arrays = old_data_sets
             # create a kernel for the save equations
             kernel = cls.create_start_computations(zipped, block)
             # Add Kernel to the Solution
@@ -97,11 +115,14 @@ class RungeKutta(Scheme):
             type_of_eq.temporalsolution = TemporalSolution()
             type_of_eq.temporalsolution.kernels += kernels
             type_of_eq.temporalsolution.start_kernels += cls.solution[type_of_eq].start_kernels
+        # Re apply the constants for multi-block, deepcopy was clearing them
+        cls.create_constants(cls.order, cls.stages)
+        cls.add_constants()
         return
 
     def create_discretisation_kernel(cls, zipped, block):
-        solution_update_kernel = Kernel(block, "Temporal solution advancement")
-        stage_update_kernel = Kernel(block, "Sub stage advancement")
+        solution_update_kernel = Kernel(block, computation_name="Temporal solution advancement")
+        stage_update_kernel = Kernel(block, computation_name="Sub stage advancement")
         # Update the range of evaluation
         solution_update_kernel.set_grid_range(block)
         stage_update_kernel.set_grid_range(block)

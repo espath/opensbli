@@ -1,5 +1,5 @@
 from opensbli.core.opensbliobjects import DataSet
-from sympy import zeros, S, nsimplify, sqrt, Matrix, Equality
+from sympy import zeros, S, nsimplify, sqrt, Matrix, Equality, pprint
 from sympy.functions.elementary.piecewise import ExprCondPair
 
 
@@ -9,6 +9,7 @@ class Carpenter(object):
     central derivatives are replaced at that domain boundary by the Carpenter scheme."""
 
     def __init__(self):
+        self.optimize = True # Zero e-15 coefficients
         self.bc4_coefficients = self.carp4_coefficients()
         self.bc4_2_coefficients = self.second_der_coefficients()
         return
@@ -97,6 +98,14 @@ class Carpenter(object):
         ar4_3 = [(864.0*R2+6480.0*R1+3335.0)/4320.0, -(108.0*R2+810.0*R1+415.0)/270.0, (864.0*R2+6480.0*R1+785.0)/4320.0, 0.0, 8.0/12.0, -1.0/12.0]
         ar4 = Matrix([ar4_0, ar4_1, ar4_2, ar4_3])
         # Form inverse and convert to rational
-        al4_inv = al4.inv()
+        # Zero e-15 coefficients
+        if self.optimize:
+            al4_inv = al4.inv(iszerofunc=lambda x: abs(x) < 1e-14)
+        else:
+            al4_inv = al4.inv()
         bc4 = al4_inv*ar4
+        
+        if self.optimize:
+            for j in range(bc4.shape[1]):
+                bc4[0,j] = float(nsimplify(bc4[0,j], tolerance=1e-12, rational=False))
         return bc4

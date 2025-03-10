@@ -9,11 +9,18 @@ class MultiBlockBoundary(object):
 
 
 class InterfaceBC(BoundaryConditionBase, MultiBlockBoundary):
-    def __init__(self, direction, side, match=(None, None, None), plane=True):
+    def __init__(self, direction, side, halos=None, name=None, match=(None, None, None), plane=True):
         # check if the match is a boundary type
         BoundaryConditionBase.__init__(self, direction, side, plane)
+        # Check the match input is correct
+        for x in match[0:3]:
+            assert type(x) is int
         self.match = match
-        self.bc_name = "interface"
+        self.halos = halos
+        if name is None:
+            self.bc_name = "interface"
+        else:
+            self.bc_name = name
         return
 
     def apply(self, arrays, block):
@@ -38,18 +45,26 @@ class InterfaceBC(BoundaryConditionBase, MultiBlockBoundary):
         kernel.ranges[direction] = [block.ranges[direction][side]+left, block.ranges[direction][side]+right]
         return kernel
 
-    def apply_interface(self, arrays, block, multiblock_descriptor, other_arrays=None):
-        # halos, kernel = self.generate_boundary_kernel(block, self.bc_name)
+    def apply_interface(self, arrays, block, multiblock_descriptor, other_arrays=None, full_halo_swap=False):
+        arrays = flatten(arrays)
         other_block = multiblock_descriptor.get_block(self.match[0])
         if other_arrays:
             other_block_arrays = other_arrays[:]
         else:
             other_block_arrays = [other_block.work_array(str(a.base.label)) for a in flatten(arrays)]
 
-        # From corresponds to the block
-        halos_block1 = self.get_halo_values(block)
-        halos_block2 = self.get_halo_values(other_block)
+        # Swap all 5 halos if required, for wide stencil filters
+        if full_halo_swap:
+            halos_block1 = [[-5, 5] for _ in range(block.ndim)]
+            halos_block2 = [[-5, 5] for _ in range(block.ndim)]
+        elif self.halos is None: # User specified halo depth
+            halos_block1 = [self.halos for _ in range(block.ndim)]
+            halos_block2 = [self.halos for _ in range(block.ndim)]
+        else:
+            halos_block1 = self.get_halo_values(block)
+            halos_block2 = self.get_halo_values(other_block)
 
+        print(halos_block2)
         # Get the number of halos requred for block 2
         from_location = [d[0] for d in halos_block2]
         to_location = [d[0] for d in halos_block2]
@@ -94,8 +109,8 @@ class InterfaceBC(BoundaryConditionBase, MultiBlockBoundary):
 
 class SharedInterfaceBC(InterfaceBC, BoundaryConditionBase, MultiBlockBoundary):
 
-    def apply_interface(self, arrays, block, multiblock_descriptor, other_arrays=None):
-        # halos, kernel = self.generate_boundary_kernel(block, self.bc_name)
+    def apply_interface(self, arrays, block, multiblock_descriptor, name=None, other_arrays=None, full_halo_swap=False):
+        arrays = flatten(arrays)
         other_block = multiblock_descriptor.get_block(self.match[0])
         if other_arrays:
             other_block_arrays = other_arrays[:]
@@ -105,7 +120,13 @@ class SharedInterfaceBC(InterfaceBC, BoundaryConditionBase, MultiBlockBoundary):
         # From corresponds to the block
         halos_block1 = self.get_halo_values(block)
         halos_block2 = self.get_halo_values(other_block)
+        # Swap all 5 halos if required, for wide stencil filters
+        if full_halo_swap:
+            halos_block1 = [[-5, 5] for _ in range(block.ndim)]
+            halos_block2 = [[-5, 5] for _ in range(block.ndim)]
 
+        halos_block1 = [[-4, 4] for _ in range(block.ndim)] ## HARDCODED WHILE TESTING
+        halos_block2 = [[-4, 4] for _ in range(block.ndim)]
         # Get the number of halos requred for block 2
         from_location = [d[0] for d in halos_block2]
         to_location = [d[0] for d in halos_block2]
@@ -134,7 +155,10 @@ class SharedInterfaceBC(InterfaceBC, BoundaryConditionBase, MultiBlockBoundary):
         ker = Kernel(block)
         # We will make use of exchange self currently, later we will change the perioidBC and combine them both
         exchange = ExchangeSelf(block, self.direction, self.side)
-        exchange.computation_name = "Shared_interface" + "_exchange"
+        if name is None:
+            exchange.computation_name = "Shared_interface_" + "exchange"
+        else:
+            exchange.computation_name = "Shared_interface_" + name
         exchange.set_transfer_size(transfer_size)
         exchange.set_transfer_from(from_location)
         exchange.set_transfer_to(to_location)

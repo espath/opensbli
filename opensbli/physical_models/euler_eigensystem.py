@@ -3,7 +3,7 @@
    @contributors Satya Pramod Jammy
    @details
 """
-from sympy import diag, eye, Rational, pprint
+from sympy import diag, eye, Rational, pprint, simplify
 from opensbli.core.opensbliobjects import ConstantObject, EinsteinTerm, DataSet
 from sympy.parsing.sympy_parser import parse_expr
 
@@ -11,8 +11,9 @@ from sympy.parsing.sympy_parser import parse_expr
 class EulerEquations(object):
     """ Class to generate the Eigensystems used to diagonalize the Euler equations."""
 
-    def __init__(self, ndim, **kwargs):
+    def __init__(self, ndim, species=None, **kwargs):
         self.ndim = ndim
+        self.species = species
         return
 
     def apply_direction(self, direction):
@@ -23,12 +24,19 @@ class EulerEquations(object):
         ev_dict, LEV_dict, REV_dict = {}, {}, {}
         # Metric symbols from block
         met_symbols = self.met_symbols
+        n_metric_terms = len(met_symbols.atoms(DataSet))
         # Metric terms for this direction to substitute into the matrix
         terms = [EinsteinTerm('k%d' % i) for i in range(self.ndim)]
-        metric_values = [met_symbols[direction, i] for i in range(self.ndim)]
+        if n_metric_terms > 0:
+            metric_values = [self.detJ*met_symbols[direction, i] for i in range(self.ndim)]
+        else:
+            metric_values = [met_symbols[direction, i] for i in range(self.ndim)]
         subs_dict = dict([(x, y) for (x, y) in zip(terms, metric_values)])
         # Scaling factor based on metrics
-        factor = sum([met_symbols[direction, i]**2 for i in range(self.ndim)])**(Rational(1, 2))
+        if n_metric_terms > 0:
+            factor = self.detJ*sum([met_symbols[direction, i]**2 for i in range(self.ndim)])**(Rational(1, 2))
+        else:
+            factor = sum([met_symbols[direction, i]**2 for i in range(self.ndim)])**(Rational(1, 2))
         required_metrics = factor.atoms(DataSet)
         subs_dict[EinsteinTerm('k')] = factor
 
@@ -37,6 +45,9 @@ class EulerEquations(object):
         ev_dict[direction] = diag(*list(self.ev.applyfunc(g)))
         LEV_dict[direction] = self.LEV.applyfunc(g)
         REV_dict[direction] = self.REV.applyfunc(g)
+        if n_metric_terms > 0:
+            # remove the detJ from the 1 / sqrt(D00*2 + D10**2) factor, as it cancels out in the LEV/REV matrices
+            factor = factor / self.detJ
         return ev_dict, LEV_dict, REV_dict, required_metrics, factor
 
     def generate_eig_system(self, block):
@@ -48,10 +59,16 @@ class EulerEquations(object):
         ndim = self.ndim
         # Check if block has metrics
         metrics = block.fd_metrics
-        if metrics.is_diagonal():
+
+        if metrics == eye(block.ndim):
             self.met_symbols = eye(block.ndim)
+            self.detJ = 1
+        elif metrics.is_diagonal() and metrics != eye(block.ndim):
+            self.met_symbols = eye(block.ndim)
+            self.detJ = block.detJ_metrics[0]
         else:
             self.met_symbols = metrics
+            self.detJ = block.detJ_metrics[0]
         local_dict = {'Symbol': EinsteinTerm, 'gama': ConstantObject('gama')}
 
         if ndim == 1:
@@ -59,12 +76,25 @@ class EulerEquations(object):
             matrix_formulae = ['a**2/(gama-1) + u0**2/2']
             matrix_symbols = [parse_expr(l, local_dict=local_dict, evaluate=False) for l in matrix_symbols]
             matrix_formulae = [parse_expr(l, local_dict=local_dict, evaluate=False) for l in matrix_formulae]
-            ev = 'diag([u0-a, u0, u0+a])'
-            REV = 'Matrix([[1,1,1], [u0-a,u0,u0+a], [H-u0*a,u0**2 /2,H+u0*a]])'
-            LEV = 'Matrix([[ u0*(2*H + a*u0 - u0**2)/(2*a*(2*H - u0**2)), (-H - a*u0 + u0**2/2)/(a*(2*H - u0**2)),  1/(2*H - u0**2)],[2*(H - u0**2)/(2*H - u0**2),2*u0/(2*H - u0**2), 2/(-2*H + u0**2)],[u0*(-2*H + a*u0 + u0**2)/(2*a*(2*H - u0**2)),  (H - a*u0 - u0**2/2)/(a*(2*H - u0**2)),  1/(2*H - u0**2)]])'
+            if self.species == 'passive_scalar':
+                REV = 'Matrix([[-2.0/a**2, 0, 2.0/(a**2*(gama - 1.0)), 2.0/(a**2*(gama - 1.0))], [-2.0*u0/a**2, 0, 2.0*(-a + u0)/(a**2*(gama - 1)), 2.0*(a + u0)/(a**2*(gama - 1))], [-1.0*u0**2/a**2, 0, 1.0*(2.0*a**2 - 2.0*a*gama*u0 + 2.0*a*u0 + 1.0*gama*u0**2 - 1.0*u0**2)/(a**2*(1.0*gama**2 - 2.0*gama + 1.0)), 1.0*(2.0*a**2 + 2.0*a*gama*u0 - 2.0*a*u0 + 1.0*gama*u0**2 - 1.0*u0**2)/(a**2*(1.0*gama**2 - 2.0*gama + 1.0))], [-2.0*f/a**2, 1.0/a, 2.0*f/(a**2*(gama - 1.0)), 2.0*f/(a**2*(gama - 1.0))]])'
+                LEV = 'Matrix([[-0.5*a**2 + 0.25*gama*u0**2 - 0.25*u0**2, 0.5*u0*(-gama + 1), 0.5*gama - 0.5, 0], [-1.0*a*f, 0, 0, 1.0*a], [0.25*u0*(a + 0.5*u0*(gama - 1.0))*(gama - 1.0), -0.25*(a + u0*(gama - 1.0))*(gama - 1.0), 0.25*(gama - 1.0)**2, 0], [0.25*u0*(-a + 0.5*u0*(gama - 1.0))*(gama - 1.0), 0.25*(a - u0*(gama - 1.0))*(gama - 1.0), 0.25*(gama - 1.0)**2, 0]])'
+                ev = 'diag([u0, u0, -a + u0, a + u0])'
+            elif self.species == 'N N2':
+                REV = 'Matrix([[-1, -2*(rhoN + rhoN2)/a, 2*rhoN/(a*(gama - 1)), 2*rhoN/(a*(gama - 1))], [1, 0, 2*rhoN2/(a*(gama - 1)), 2*rhoN2/(a*(gama - 1))], [0, -2*u0*(rhoN + rhoN2)/a, 2*(-a + u0)*(gama - 1)*(rhoN + rhoN2)/(a*(gama - 1)**2), 2*(a + u0)*(rhoN + rhoN2)/(a*(gama - 1))], [0, -1*u0**2*(rhoN + rhoN2)/a, (rhoN + rhoN2)*(2*a**2*(gama - 1) + 2*a**2 - 2*a*gama*u0*(gama - 1.0) + 1.0*gama*u0**2*(gama - 1.0))/(a*gama*(gama - 1.0)**2), (rhoN + rhoN2)*(2.0*a**2*(gama - 1.0) + 2.0*a**2 + 2.0*a*gama*u0*(gama - 1.0) + 1.0*gama*u0**2*(gama - 1.0))/(a*gama*(gama - 1.0)**2)]])'
+                LEV = 'Matrix([[-0.5*rhoN2*u0**2*(gama - 1)/(a**2*(rhoN + rhoN2)), (1.0*a**2*rhoN + 1.0*a**2*rhoN2 - 0.5*gama*rhoN2*u0**2 + 0.5*rhoN2*u0**2)/(a**2*(rhoN + rhoN2)), 1.0*rhoN2*u0*(gama - 1)/(a**2*(rhoN + rhoN2)), -1.0*rhoN2*(gama - 1)/(a**2*(rhoN + rhoN2))], [1.0*(-0.5*a**2 + 0.25*gama*u0**2 - 0.25*u0**2)/(a*(rhoN + rhoN2)), 1.0*(-0.5*a**2 + 0.25*gama*u0**2 - 0.25*u0**2)/(a*(rhoN + rhoN2)), -0.5*u0*(gama - 1)/(a*(rhoN + rhoN2)), 0.5*(gama - 1)/(a*(rhoN + rhoN2))], [0.25*u0*(a + 0.5*u0*(gama - 1.0))*(gama - 1.0)/(a*(rhoN + rhoN2)), 0.25*u0*(a + 0.5*u0*(gama - 1.0))*(gama - 1.0)/(a*(rhoN + rhoN2)), 0.25*(a*(-gama + 1) - u0*(gama - 1.0)**2)/(a*(rhoN + rhoN2)), 0.25*(gama - 1.0)**2/(a*(rhoN + rhoN2))], [0.25*u0*(-a + 0.5*u0*(gama - 1.0))*(gama - 1.0)/(a*(rhoN + rhoN2)), 0.25*u0*(-a + 0.5*u0*(gama - 1.0))*(gama - 1.0)/(a*(rhoN + rhoN2)), 0.25*(a*(gama - 1) - u0*(gama - 1.0)**2)/(a*(rhoN + rhoN2)), 0.25*(gama - 1.0)**2/(a*(rhoN + rhoN2))]])'
+                ev = 'diag([u0, u0, -a + u0, a + u0])'
+            else:
+                ev = 'diag([u0-a, u0, u0+a])'
+                REV = 'Matrix([[1,1,1], [u0-a,u0,u0+a], [H-u0*a,u0**2 /2,H+u0*a]])'
+                LEV = 'Matrix([[ u0*(2*H + a*u0 - u0**2)/(2*a*(2*H - u0**2)), (-H - a*u0 + u0**2/2)/(a*(2*H - u0**2)),  1/(2*H - u0**2)],[2*(H - u0**2)/(2*H - u0**2),2*u0/(2*H - u0**2), 2/(-2*H + u0**2)],[u0*(-2*H + a*u0 + u0**2)/(2*a*(2*H - u0**2)),  (H - a*u0 - u0**2/2)/(a*(2*H - u0**2)),  1/(2*H - u0**2)]])'
             ev = parse_expr(ev, local_dict=local_dict, evaluate=False)
             REV = parse_expr(REV, local_dict=local_dict, evaluate=False)
             LEV = parse_expr(LEV, local_dict=local_dict, evaluate=False)
+            pprint(REV)
+            print('------------------------------------------------')
+            pprint(LEV)
+            print('------------------------------------------------')
 
             subs_dict = dict(zip(matrix_symbols, matrix_formulae))
 

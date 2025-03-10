@@ -4,21 +4,22 @@
    @details
 """
 
-from sympy import flatten, Equality
+from sympy import flatten, Equality, pprint
 from opensbli.core.opensbliobjects import DataSet, ConstantIndexed, ConstantObject,\
-    GlobalValue, GroupedPiecewise, Constant
+    GlobalValue, GroupedPiecewise, Constant, ReductionVariable, DataSetBase, Globalvariable, WhileLoop, ForLoop
 from opensbli.equation_types.opensbliequations import OpenSBLIEq
 from opensbli.core.grid import Grididx
 from opensbli.core.datatypes import SimulationDataType
-from opensbli.utilities.helperfunctions import get_min_max_halo_values, dataset_attributes
+from opensbli.utilities.helperfunctions import get_min_max_halo_values
 from opensbli.core.datatypes import Int
 import copy
 
-_known_equation_types = (GroupedPiecewise, OpenSBLIEq)
+_known_equation_types = (WhileLoop, ForLoop, GroupedPiecewise, OpenSBLIEq)
 
 
 class ConstantsToDeclare(object):
     constants = []
+    counter = 0
 
     @staticmethod
     def add_constant(constant, value=None, dtype=None):
@@ -26,14 +27,24 @@ class ConstantsToDeclare(object):
         if isinstance(constant, Constant):
             if constant not in ConstantsToDeclare.constants:
                 ConstantsToDeclare.constants += [constant]
+                constant.counter = ConstantsToDeclare.counter
+                ConstantsToDeclare.counter += 1
         elif isinstance(constant, list):
             for c in constant:
                 if c not in ConstantsToDeclare.constants:
                     ConstantsToDeclare.constants += [c]
+                    c.counter = ConstantsToDeclare.counter
+                    ConstantsToDeclare.counter += 1
         else:
             raise ValueError("Unknown type of constant")
         return
 
+    def sort_constants():
+        """ Sort the constants with rational constants printed last."""
+        regular = [c for c in ConstantsToDeclare.constants if not c.rational]
+        rational = sorted([c for c in ConstantsToDeclare.constants if c.rational], key=lambda x: str(x))
+        ConstantsToDeclare.constants = regular + rational
+        return
 
 def copy_block_attributes(block, otherclass):
     """ Move this to block."""
@@ -42,13 +53,23 @@ def copy_block_attributes(block, otherclass):
     otherclass.block_name = block.blockname
     return
 
+def dataset_attributes(dset):
+    """ Add missing attributes to datasets if needed."""
+    dset.block_number = None
+    dset.read_from_hdf5 = False
+    # dset.datatype = None
+    dset.size = None
+    dset.halo_ranges = None
+    dset.block_name = None
+    return dset
+
 
 class StencilObject(object):
     def __init__(self, name, stencil, ndim):
         self.name = name
         self.stencil = stencil
         self.ndim = ndim
-        self.dtype = Int()
+        self.datatype = Int()
         return
 
     def sort_stencil_indices(self):
@@ -64,12 +85,17 @@ class Kernel(object):
     mulfactor = {0: 1, 1: 1}
     opsc_access = {'ins': "OPS_READ", "outs": "OPS_WRITE", "inouts": "OPS_RW"}
 
-    def __init__(self, block, computation_name=None):
+    def __init__(self, block, kernel_name=None, computation_name=None):
         """ Set up the computational kernel"""
         copy_block_attributes(block, self)
         self.computation_name = computation_name
         self.kernel_no = block.kernel_counter
+        # Check for duplicate kernels
+        block.block_kernel_names.append([computation_name] + [computation_name])
+        # if kernel_name is None:
         self.kernelname = self.block_name + "Kernel%03d" % self.kernel_no
+        # else:
+        #     self.kernelname = kernel_name
         block.increase_kernel_counter
         self.equations = []
         self.halo_ranges = [[set(), set()] for d in range(block.ndim)]
@@ -96,10 +122,18 @@ class Kernel(object):
             self.equations += [equation]
         elif isinstance(equation, GroupedPiecewise):
             self.equations += [equation]
+        elif isinstance(equation, WhileLoop):
+            self.equations += [equation]
+        elif isinstance(equation, ForLoop):
+            self.equations += [equation]
         elif equation:
             pass
         else:
             raise ValueError("Error when adding equations to the kernel.")
+        return
+
+    def set_reduction_variables(self, equation):
+
         return
 
     def set_grid_range(self, block):
@@ -146,6 +180,32 @@ class Kernel(object):
         return datasets
 
     @property
+    def rhs_reduction_variables(self):
+        reduction_vars = set()
+        for eq in self.equations:
+            if isinstance(eq, OpenSBLIEq):
+                reduction_vars = reduction_vars.union(eq.rhs.atoms(ReductionVariable))
+            elif isinstance(eq, GroupedPiecewise):
+                reduction_vars = reduction_vars.union(eq.atoms(ReductionVariable))
+            elif isinstance(eq, WhileLoop):
+                reduction_vars = reduction_vars.union(eq.atoms(ReductionVariable))
+            elif isinstance(eq, ForLoop):
+                reduction_vars = reduction_vars.union(eq.atoms(ReductionVariable))
+            elif isinstance(eq, Equality):
+                raise TypeError("Equality should be of types %s" % _known_equation_types)
+        return reduction_vars
+
+    @property
+    def lhs_reduction_variables(self):
+        reduction_vars = set()
+        for eq in self.equations:
+            if isinstance(eq, OpenSBLIEq):
+                reduction_vars = reduction_vars.union(eq.lhs.atoms(ReductionVariable))
+            elif isinstance(eq, Equality):
+                raise TypeError("Equality should be of types %s" % _known_equation_types)
+        return reduction_vars
+
+    @property
     def constants(self):
         consts = set()
         for eq in self.equations:
@@ -169,6 +229,16 @@ class Kernel(object):
             if isinstance(eq, _known_equation_types):
                 globals_vars_lhs = globals_vars_lhs.union(eq.atoms(GlobalValue))
         return globals_vars_lhs, globals_vars_rhs
+
+    @property
+    def reduction_variables(self):
+        reductions_lhs = self.lhs_reduction_variables
+        reductions_rhs = self.rhs_reduction_variables
+        # # Remove summation reduction variables from the right-hand side as they are not an input
+        reductions_rhs = filter(lambda x:x.reduction_type!='OPS_INC', reductions_rhs)
+        reductions_rhs = set(reductions_rhs)
+        return reductions_rhs, reductions_lhs
+    
 
     @property
     def grid_indices_used(self):
@@ -208,7 +278,8 @@ class Kernel(object):
             if isinstance(eq, Equality):
                 latex.write_expression(eq)
             elif isinstance(eq, GroupedPiecewise):
-                print("Should be doing latex for grouped piecewise")  # TODO
+                for term in eq.args:
+                    latex.write_expression(term)
         return
 
     def total_range(self):
@@ -239,6 +310,19 @@ class Kernel(object):
         inouts = ins.intersection(outs)
         ins = ins.difference(inouts)
         outs = outs.difference(inouts)
+        # Add global variables
+        if self.global_variables:
+            # We need to write the size of an array for global indexed
+            global_ins, global_outs = self.global_variables
+            ins = (*ins, *global_ins)
+            outs = (*outs, *global_outs)
+        # Check for any reduction variables in the kernel
+        rvs_in = self.rhs_reduction_variables
+        rvs_out = self.lhs_reduction_variables
+        # Add Reduction variables
+        ins = (*ins, *rvs_in)
+        outs = (*outs, *rvs_out)
+
         if len(self.equations) == 0:
             raise ValueError("Kernel %s does not have any equations." % self.computation_name)
         range_of_eval = self.total_range()
@@ -249,33 +333,80 @@ class Kernel(object):
         # TODO check the dtype from the dataset
         sim_dtype = SimulationDataType.opsc()
         code += ['ops_par_loop(%s, \"%s\", %s, %s, %s' % (name, self.computation_name, block_name, self.ndim, iter_name)]
-        for i in ins:
-            code += ['ops_arg_dat(%s, %d, %s, \"%s\", %s)' % (i, 1, self.stencil_names[i], sim_dtype, self.opsc_access['ins'])]  # WARNING dtype
-        for o in outs:
-            code += ['ops_arg_dat(%s, %d, %s, \"%s\", %s)' % (o, 1, self.stencil_names[o], sim_dtype, self.opsc_access['outs'])]  # WARNING dtype
-        for io in inouts:
-            code += ['ops_arg_dat(%s, %d, %s, \"%s\", %s)' % (io, 1, self.stencil_names[io], sim_dtype, self.opsc_access['inouts'])]  # WARNING dtype
+        # Step 1: Input quantities
+        for i in sorted(ins, key=lambda x: str(x)):
+            if isinstance(i, ReductionVariable):
+                if i.reduction_type != 'OPS_INC': # summation reduction variables are not an input
+                    code += ['ops_arg_gbl(&%s_out, %d, \"%s\", %s)' % (i, 1, sim_dtype, 'OPS_READ')]
+            elif isinstance(i, DataSetBase):
+                if hasattr(i, "datatype") and i.datatype:
+                    code += ['ops_arg_dat(%s, %d, %s, \"%s\", %s)' % (i, 1, self.stencil_names[i], i.datatype.opsc(), self.opsc_access['ins'])]
+                else:
+                    code += ['ops_arg_dat(%s, %d, %s, \"%s\", %s)' % (i, 1, self.stencil_names[i], sim_dtype, self.opsc_access['ins'])]
+            elif isinstance(i, Globalvariable):
+                code += ["ops_arg_gbl(&%s, %d, \"%s\", %s)" % (i, 1, i.datatype.opsc(), self.opsc_access['ins'])]
+            # elif isinstance(i, ConstantIndexed):
+            #     code += ["ops_arg_gbl(&%s, %d, \"%s\", %s)" % (i, 1, sim_dtype, self.opsc_access['ins'])]
+            else:
+                raise ValueError("Found unknown datatype {} in kernel inputs.".format(i))
+        # Step 2: Output quantities
+        for o in sorted(outs, key=lambda x: str(x)):
+            if isinstance(o, ReductionVariable):
+                code += ['ops_arg_reduce(%s, %d, \"%s\", %s)' % (o, 1, sim_dtype, o.reduction_type)]
+            elif isinstance(o, DataSetBase):
+                if hasattr(o, "datatype") and o.datatype:
+                    code += ['ops_arg_dat(%s, %d, %s, \"%s\", %s)' % (o, 1, self.stencil_names[o], o.datatype.opsc(), self.opsc_access['outs'])]
+                else:
+                    code += ['ops_arg_dat(%s, %d, %s, \"%s\", %s)' % (o, 1, self.stencil_names[o], sim_dtype, self.opsc_access['outs'])]
+            elif isinstance(o, Globalvariable):
+                code += ["ops_arg_gbl(&%s, %d, \"%s\", %s)" % (o, 1, o.datatype.opsc(), self.opsc_access['outs'])]
+            else:
+                raise ValueError("Found unknown datatype {} in kernel outputs.".format(o))
+        # Step 3: Input & Output quantities
+        for io in sorted(inouts, key=lambda x: str(x)):
+            # Only DataSets are Read/Write
+            if hasattr(io, "datatype") and io.datatype:
+                code += ['ops_arg_dat(%s, %d, %s, \"%s\", %s)' % (io, 1, self.stencil_names[io], io.datatype.opsc(), self.opsc_access['inouts'])]
+            else:
+                code += ['ops_arg_dat(%s, %d, %s, \"%s\", %s)' % (io, 1, self.stencil_names[io], sim_dtype, self.opsc_access['inouts'])]
+
+        # Add indexed constants (e.g. rkA, rkB)
         if self.IndexedConstants:
-            for c in self.IndexedConstants:
+            for c in sorted(self.IndexedConstants, key=lambda x: str(x)):
                 code += ["ops_arg_gbl(&%s, %d, \"%s\", %s)" % (c, 1, sim_dtype, self.opsc_access['ins'])]
-        if self.global_variables:
-            # We need to write the size of an array for global indexed
-            global_ins, global_outs = self.global_variables
-            if global_ins.intersection(global_outs):
-                raise NotImplementedError("Input output of global variables is not implemented")
-            for c in global_ins:
-                code += ["ops_arg_gbl(&%s, %d, \"%s\", %s)" % (c, 1, c.datatype.opsc(), self.opsc_access['ins'])]
-            for c in global_outs:
-                code += ["ops_arg_gbl(&%s, %d, \"%s\", %s)" % (c, 1, c.datatype.opsc(), self.opsc_access['outs'])]
+
+        # i,j,k identifier in OPS
         if self.grid_indices_used:
             code += ["ops_arg_idx()"]
-        code = [',\n'.join(code) + ');\n\n']  # WARNING dtype
+
+        code = [',\n'.join(code) + ');\n']
+        # Write out the reduction result if required
+        if len(rvs_out) > 0:
+            for r in rvs_out:
+                code += ['ops_reduction_result(%s, &%s);' % (str(r), r.value)]
         code = iter_name_code + code
         return code
 
-    def ops_argument_call(self, array, stencil, precision, access_type):
-        template = 'ops_arg_dat(%s, %d, %s, \"%s\", %s)'
-        return template % (array, 1, stencil, self.dtype, access_type)
+    # def ops_argument_call(self, array, stencil, precision, access_type):
+    #     template = 'ops_arg_dat(%s, %d, %s, \"%s\", %s)'
+    #     return template % (array, 1, stencil, self.dtype, access_type)
+
+    def generate_stencil_name(self, stencil, block):
+        """ Create a stencil name based on the min/max values in each direction"""
+        indices_to_process = []
+        for indices in stencil:
+            indices_to_process.append(list(indices))
+        # Create a name based on the min/max stencil values
+        name = 'stencil_%d' % (block.blocknumber)
+        nzeros = 0
+        for direction in range(block.ndim):
+            indices = [x[direction] for x in indices_to_process]
+            zeros = [x for x in indices if x == 0]
+            nzeros += len(zeros)
+            xm, xp = abs(min(indices)), max(indices)
+            name += '_%d%d' % (xm, xp)
+        name += '_%d' % nzeros
+        return name
 
     def update_block_datasets(self, block):
         """ Check the following
@@ -315,11 +446,19 @@ class Kernel(object):
         stens = self.get_stencils()
         for dset, stencil in stens.items():
             if stencil not in block.block_stencils.keys():
-                name = 'stencil_%d_%02d' % (block.blocknumber, len(block.block_stencils.keys()))
-
+                # Add more descriptive naming of the stencils
+                name = self.generate_stencil_name(stencil, block)
+                # Check no duplicate names
+                for stencil_obj in block.block_stencils.values():
+                    assert name != stencil_obj.name
+                # name = 'stencil_%d_%02d' % (block.blocknumber, len(block.block_stencils.keys()))
                 block.block_stencils[stencil] = StencilObject(name, stencil, block.ndim)
             if dset not in self.stencil_names:
                 self.stencil_names[dset] = block.block_stencils[stencil].name
             else:
                 self.stencil_names[dset].add(block.block_stencils[stencil].name)
+        # Add any reduction quantities to the block, for reduction handle declarations
+        rvs = self.lhs_reduction_variables.union(self.rhs_reduction_variables)
+        for rv in rvs:
+            block.block_reductions[str(rv)] = rv
         return

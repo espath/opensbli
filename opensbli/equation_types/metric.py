@@ -4,10 +4,11 @@
    @details Implements the metric transformations of first and second derivatives
 """
 
-from sympy import zeros, flatten, Matrix, Function, S, Equality
+from sympy import zeros, flatten, Matrix, Function, S, Equality, pprint, Rational
+from sympy import symbols as s
 from opensbli.code_generation.algorithm.common import BeforeSimulationStarts
 from opensbli.equation_types.opensbliequations import NonSimulationEquations, Discretisation, Solution, OpenSBLIEquation
-from opensbli.core.opensblifunctions import CentralDerivative
+from opensbli.core.opensblifunctions import CentralDerivative as CD
 from sympy.tensor.array import MutableDenseNDimArray
 from opensbli.core.opensbliobjects import CoordinateObject, DataObject
 from opensbli.core.kernel import Kernel
@@ -15,12 +16,17 @@ from opensbli.code_generation.latex import LatexWriter
 from opensbli.core.boundary_conditions.bc_core import BoundaryConditionBase
 from opensbli.core.parsing import EinsteinEquation
 from opensbli.equation_types.opensbliequations import OpenSBLIEq
+from opensbli.core.boundary_conditions.multi_block import MultiBlockBoundary, SharedInterfaceBC, InterfaceBC
+from copy import deepcopy
+
 
 
 class MetricsEquation(NonSimulationEquations, Discretisation, Solution):
-    def __new__(cls, **kwargs):
+    def __new__(cls, write_derivatives=True, conservative_metrics = False, **kwargs):
         ret = super(MetricsEquation, cls).__new__(cls, **kwargs)
         ret.equations = []
+        ret.conservative_metrics = conservative_metrics
+        ret.write_derivatives = write_derivatives
         ret.kwargs = {'strong_differentiability': True}
         ret.algorithm_place = [BeforeSimulationStarts()]
         ret.order = 1
@@ -34,7 +40,9 @@ class MetricsEquation(NonSimulationEquations, Discretisation, Solution):
     def _hashable_content(self):
         return "MetricsEquation"
 
-    def generate_transformations(cls, ndim, coordinate_symbol, parameters, max_order):
+    def generate_transformations(cls, ndim, coordinate_symbol, parameters, max_order, latex_debug=True):
+        # Optional LaTeX output of the transformed equations
+        cls.latex_debug = latex_debug
         cls.ndim = ndim
         if len(flatten(parameters)) != ndim*2:
             raise ValueError("The parameters for stretching provided should match the number of dimensions")
@@ -47,10 +55,12 @@ class MetricsEquation(NonSimulationEquations, Discretisation, Solution):
         curvilinear_coordinates = [curv.apply_index(cart.indices[0], dim) for dim in range(ndim)]
         cls.curvilinear_coordinates = curvilinear_coordinates
         cls.cartesian_coordinates = cartesian_coordinates
-        cls.latex_debug_start()
+        if cls.latex_debug:
+            cls.latex_debug_start()
         fd_subs, fd_fns = cls.transform_first_derivative(coordinate_symbol)
         cls.transform_second_derivative(coordinate_symbol, fd_subs, fd_fns)
-        cls.latex_debug_end()
+        if cls.latex_debug:
+            cls.latex_debug_end()
         return
 
     def latex_debug_start(self):
@@ -102,12 +112,12 @@ class MetricsEquation(NonSimulationEquations, Discretisation, Solution):
                 args_orig = [cls.curvilinear_coordinates[i], cls.cartesian_coordinates[j]]
                 args_eval = [cls.curvilinear_coordinates[i], M2[i, j]]
                 args_metricder = [DataObject("%s" % cls.cartesian_coordinates[i]), cls.curvilinear_coordinates[j]]
-                v = CentralDerivative(*args_eval).doit()
-                if isinstance(v, CentralDerivative):
-                    fd_subs[CentralDerivative(*args_orig)] = fd_jacobians[i, j]
-                    Cartesian_curvilinear_derivatives[i, j] = CentralDerivative(*args_metricder)
+                v = CD(*args_eval).doit()
+                if isinstance(v, CD):
+                    fd_subs[CD(*args_orig)] = fd_jacobians[i, j]
+                    Cartesian_curvilinear_derivatives[i, j] = CD(*args_metricder)
                 else:
-                    fd_subs[CentralDerivative(*args_orig)] = v
+                    fd_subs[CD(*args_orig)] = v
                     fd_jacobians[i, j] = v
                     Cartesian_curvilinear_derivatives[i, j] = v
         fd_transformed = zeros(cls.ndim, 1)
@@ -128,22 +138,62 @@ class MetricsEquation(NonSimulationEquations, Discretisation, Solution):
         for d in fd_transformed:
             cls.classical_strong_differentiabilty_transformation += [d]
         # Write latex file for easy debugging
-        latex = cls.latex_file
-        for i in range(cls.ndim):
-            cd = CentralDerivative(cls.general_function, cls.cartesian_coordinates[i])
-            latex.write_expression(OpenSBLIEq(cd, cls.classical_strong_differentiabilty_transformation[i]))
+        if cls.latex_debug:
+            latex = cls.latex_file
+            for i in range(cls.ndim):
+                cd = CD(cls.general_function, cls.cartesian_coordinates[i])
+                latex.write_expression(OpenSBLIEq(cd, cls.classical_strong_differentiabilty_transformation[i]))
         return fd_subs, M2
 
+    # def conservative_3D_metrics(cls, Cartesian_curvilinear_derivatives):
+    #     # Coordinate arrays
+    #     xi, eta, zeta = cls.curvilinear_coordinates
+    #     x, y, z = cls.cartesian_coordinates
+    #     mets = Cartesian_curvilinear_derivatives
+    #     args = []
+    #     D00 = CD(mets[1,1]*z, zeta).doit() - CD(mets[1,2]*z, eta).doit() + CD(y*mets[2,2], eta).doit() - CD(y*mets[2,1], zeta).doit()
+    #     D01 = CD(mets[2,1]*x, zeta).doit() - CD(mets[2,2]*x, eta).doit() + CD(z*mets[0,2], eta).doit() - CD(z*mets[0,1], zeta).doit()
+    #     D02 = CD(mets[0,1]*y, zeta).doit() - CD(mets[0,2]*y, eta).doit() + CD(x*mets[1,2], eta).doit() - CD(x*mets[1,1], zeta).doit()
+
+    #     D10 = CD(mets[1,2]*z, xi).doit() - CD(mets[1,0]*z, zeta).doit() + CD(y*mets[2,0], zeta).doit() - CD(y*mets[2,2], xi).doit()
+    #     D11 = CD(mets[2,2]*x, xi).doit() - CD(mets[2,0]*x, zeta).doit() + CD(z*mets[0,0], zeta).doit() - CD(z*mets[0,2], xi).doit()
+    #     D12 = CD(mets[0,2]*y, xi).doit() - CD(mets[0,0]*y, zeta).doit() + CD(x*mets[1,0], zeta).doit() - CD(x*mets[1,2], xi).doit()
+
+    #     D20 = CD(mets[1,0]*z, eta).doit() - CD(mets[1,1]*z, xi).doit() + CD(y*mets[2,1], xi).doit() - CD(y*mets[2,0], eta).doit()
+    #     D21 = CD(mets[2,0]*x, eta).doit() - CD(mets[2,1]*x, xi).doit() + CD(z*mets[0,1], xi).doit() - CD(z*mets[0,0], eta).doit()
+    #     D22 = CD(mets[0,0]*y, eta).doit() - CD(mets[0,1]*y, xi).doit() + CD(x*mets[1,1], xi).doit() - CD(x*mets[1,0], eta).doit()
+
+    #     pprint(cls.FD_metrics)
+    #     pprint(D20)
+    #     exit()
+    #     # Temp arrays
+
+
+    #     return
+
+    def output_grid_derivatives(cls, Cartesian_curvilinear_derivatives):
+        eqns = []
+        # Temporary arrays
+        cls.grid_der_wks = s("wk0:%d" % cls.ndim**2, **{'cls':DataObject})
+        eqns = [OpenSBLIEq(wk, Cartesian_curvilinear_derivatives[i]) for i, wk in enumerate(cls.grid_der_wks) if isinstance(Cartesian_curvilinear_derivatives[i], CD)]
+        # Take only the non-zero ones to write to disk
+        cls.grid_der_wks = [ar.lhs for ar in eqns]
+        return eqns
+
     def generate_fd_metrics_equations(cls, Cartesian_curvilinear_derivatives):
+        eqns = []
+        # Write the derivatives of (x,y,z) to file for post-processing requirements if needed
+        if cls.write_derivatives:
+            eqns += cls.output_grid_derivatives(Cartesian_curvilinear_derivatives)
         adjointJ = Cartesian_curvilinear_derivatives.adjugate()
         detJ = Cartesian_curvilinear_derivatives.det()
         evaluation = adjointJ/detJ
-        eqns = []
-        eqns = [OpenSBLIEq(cls.detJ, detJ)]
+        eqns += [OpenSBLIEq(cls.detJ, detJ)]
         eqns += [OpenSBLIEq(x, y) for (x, y) in zip(cls.FD_metrics, evaluation)]
         eqns = [e for e in eqns if isinstance(e, Equality)]
         eqns = [OpenSBLIEquation(eq.lhs, eq.rhs) for eq in eqns]
         cls.fdequations = eqns
+        cls.grid_der_wks = [ar.lhs for ar in eqns]
         return eqns
 
     def transform_second_derivative(cls, coordinate_symbol, fd_subs, M2):
@@ -154,7 +204,7 @@ class MetricsEquation(NonSimulationEquations, Discretisation, Solution):
         SD_evaluations = MutableDenseNDimArray([0 for i in range(cls.ndim) for j in range(cls.ndim) for k in range(cls.ndim)], (cls.ndim, cls.ndim, cls.ndim))
         SD_jacobians = MutableDenseNDimArray([0 for i in range(cls.ndim) for j in range(cls.ndim) for k in range(cls.ndim)],
                                              (cls.ndim, cls.ndim, cls.ndim))
-        latex = cls.latex_file
+        # latex = cls.latex_file
         for i in range(M2.shape[0]):
             for j in range(M2.shape[0]):
                 if M2[i, j] in cls.curvilinear_coordinates:
@@ -170,15 +220,15 @@ class MetricsEquation(NonSimulationEquations, Discretisation, Solution):
                 for k in range(cls.ndim):
                     args_orig = [cls.curvilinear_coordinates[i], cls.cartesian_coordinates[j], cls.curvilinear_coordinates[k]]
                     args_eval = [cls.curvilinear_coordinates[i], cls.cartesian_coordinates[j], SD[i, j, k]]
-                    v = CentralDerivative(*args_eval).doit()
+                    v = CD(*args_eval).doit()
                     derivative_args = [cls.FD_metrics[i, j], cls.curvilinear_coordinates[k]]
-                    sd = CentralDerivative(*derivative_args).doit()
+                    sd = CD(*derivative_args).doit()
                     if sd == S.Zero:
-                        sd_subs[CentralDerivative(*args_orig)] = 0
-                    elif not isinstance(v, CentralDerivative):
-                        sd_subs[CentralDerivative(*args_orig)] = 0
+                        sd_subs[CD(*args_orig)] = 0
+                    elif not isinstance(v, CD):
+                        sd_subs[CD(*args_orig)] = 0
                     else:
-                        sd_subs[CentralDerivative(*args_orig)] = DataObject("SD%d%d%d" % (i, j, k))
+                        sd_subs[CD(*args_orig)] = DataObject("SD%d%d%d" % (i, j, k))
                         SD_jacobians[i, j, k] = DataObject("SD%d%d%d" % (i, j, k))
                         SD_evaluations[i, j, k] = sd
 
@@ -198,10 +248,12 @@ class MetricsEquation(NonSimulationEquations, Discretisation, Solution):
         cls.SD_metrics = SD_jacobians
         cls.SD_evaluations = SD_evaluations
         cls.generate_sd_metrics_equations()
-        for i in range(cls.ndim):
-            for j in range(cls.ndim):
-                fn = CentralDerivative(cls.general_function, cls.cartesian_coordinates[i], cls.cartesian_coordinates[j])
-                latex.write_expression(OpenSBLIEq(fn, cls.classical_strong_differentiabilty_transformation_sd[i, j]))
+        if cls.latex_debug:
+            latex = cls.latex_file
+            for i in range(cls.ndim):
+                for j in range(cls.ndim):
+                    fn = CD(cls.general_function, cls.cartesian_coordinates[i], cls.cartesian_coordinates[j])
+                    latex.write_expression(OpenSBLIEq(fn, cls.classical_strong_differentiabilty_transformation_sd[i, j]))
         return
 
     def generate_sd_metrics_equations(cls):
@@ -256,7 +308,7 @@ class MetricsEquation(NonSimulationEquations, Discretisation, Solution):
             cls.create_residual_arrays()
             schemes[sc].discretise(cls, block)
             schemes[sc].required_constituent_relations = {}
-            # Apply metric boundary conditions
+            # Apply metric boundary conditions on the first derivative metrics, to be able to calculate the second derivative metrics after
             cls.metric_boundary_condition(block)
             cls.fd_kernels = cls.Kernels
             cls.Kernels = []
@@ -288,11 +340,11 @@ class MetricsEquation(NonSimulationEquations, Discretisation, Solution):
 
 #MB change
     def apply_interface_bc(cls, block, multiblock_descriptor):
+        """ Interface boundary condition on the first derivative metrics and detJ."""
         arrays = cls.FD_metrics[:] + [cls.detJ]
         arrays = [a for a in arrays if isinstance(a, DataObject)]
         arrays = block.dataobjects_to_datasets_on_block(arrays)
         kernels = MetricInterfaceBC().apply(block, arrays, multiblock_descriptor, cls)
-        #kernels = block.apply_interface_bc(arrays, multiblock_descriptor)
         cls.fd_kernels += kernels
         return
 
@@ -310,7 +362,7 @@ class MetricsEquation(NonSimulationEquations, Discretisation, Solution):
         # the function self.interface_test
         factors += [-S.One]
         return factors
-#MB CHANGE
+# #MB CHANGE
 
     def metric_boundary_condition(cls, block):
         arrays = cls.FD_metrics[:] + [cls.detJ]
@@ -325,7 +377,7 @@ class MetricsEquation(NonSimulationEquations, Discretisation, Solution):
                 # Apply Metric BC only if that direction and side is not periodic
                 if isinstance(block.boundary_types[direction][side], bc_types):
                     bc = block.boundary_types[direction][side]
-                    cls.Kernels += [bc.apply(arrays, block)]
+                    cls.Kernels += [bc.apply(arrays, block, full_depth=True)] # Swap all 5 halos for the metrics once at the start
                 elif not isinstance(block.boundary_types[direction][side], donot_apply):
                     bc = MetricBoundaryCondition(direction, side)
                     cls.Kernels += [bc.apply(arrays, block)]
@@ -339,38 +391,56 @@ class MetricInterfaceBC(object):
     
     def apply(self, block, arrays, multiblock_descriptor, metrics):
         kernels = block.apply_interface_bc(arrays, multiblock_descriptor)
+        # Apply only to SharedInterfaces
+        shared_interface_kernels = [x for x in kernels if 'Shared' in x.computation_name]
+        inner_block_interface_kernels = []
         interface_bcs = block.get_interface_bc
         for bc in interface_bcs:
-            other_block = multiblock_descriptor.get_block(bc.match[0])
-            other_block_arrays = [other_block.work_array(str(a.base.label)) for a in flatten(arrays)]
-            direction, side = bc.match[1], bc.match[2]
-            other_bc = other_block.boundary_types[direction][side]
-            halos, kernel = other_bc.generate_boundary_kernel(other_block, other_bc.bc_name)
-            # Get the factors for fd metrics and jacobians
-            factor_for_arrays = metrics.fd_interface_factors(direction)
-            equations = []
-            for ar, factor in zip(other_block_arrays, factor_for_arrays):
-                equations += [OpenSBLIEq(ar, factor*ar)]
-            # Remove non equations
-            equations = [eq for eq in equations if isinstance(eq, OpenSBLIEq)]
-            kernel.add_equation(equations)
-            kernel.halo_ranges[direction][side] = other_block.boundary_halos[direction][side]
-            kernel.update_block_datasets(other_block)
-            kernels += [kernel]
-        from sympy import pprint
+            # Apply a halo exchange on the metrics if it is a shared interface
+            if isinstance(bc, SharedInterfaceBC):
+                other_block = multiblock_descriptor.get_block(bc.match[0])
+                other_block_arrays = [other_block.work_array(str(a.base.label)) for a in flatten(arrays)]
+                direction, side = bc.match[1], bc.match[2]
+                other_bc = other_block.boundary_types[direction][side]
+                halos, kernel = other_bc.generate_boundary_kernel(other_block, other_bc.bc_name)
+                # Get the factors for fd metrics and jacobians
+                factor_for_arrays = metrics.fd_interface_factors(direction)
+                equations = []
+                for ar, factor in zip(other_block_arrays, factor_for_arrays):
+                    equations += [OpenSBLIEq(ar, factor*ar)]
+                # Remove non equations
+                equations = [eq for eq in equations if isinstance(eq, OpenSBLIEq)]
+                kernel.add_equation(equations)
+                kernel.halo_ranges[direction][side] = other_block.boundary_halos[direction][side]
+                kernel.update_block_datasets(other_block)
+                shared_interface_kernels += [kernel]
+            # Else, for regular interfaces extend the last metric into the halos on this block, with no inter-block communication
+            elif isinstance(bc, InterfaceBC):
+                # Call a metric boundary at this interface
+                direction, side = bc.direction, bc.side
+                MBC_kernel = MetricBoundaryCondition(direction, side, plane=True).apply(arrays, block)
+                inner_block_interface_kernels += [MBC_kernel]
+                # from sympy import pprint
+                # for eqn in MBC_kernel.equations:
+                    # pprint(eqn)
+                # # print(bc.__dict__)
+                # exit()
+            else:
+                raise ValueError("Metric interface boundary conditions should either be type InterfaceBC or SharedInterfaceBC.")
+
         # for eqn in kernel.equations:
         #     pprint(eqn)
-        # exit()
-        return kernels
+        # # exit()
+        return shared_interface_kernels + inner_block_interface_kernels
 
 class MetricBoundaryCondition(BoundaryConditionBase):
     def __init__(self, boundary_direction, side, plane=True):
         BoundaryConditionBase.__init__(self, boundary_direction, side, plane)
-        self.bc_name = 'Metric'
+        self.bc_name = 'Metric_copy'
         return
 
     def apply(self, arrays, block):
-        halos, kernel = self.generate_boundary_kernel(block, self.bc_name)
+        halos, kernel = self.generate_boundary_kernel(block, self.bc_name + '_block%d' % block.blocknumber)
         from_side_factor, to_side_factor = self.set_side_factor()
         transfer_indices = [tuple([from_side_factor*t, to_side_factor*t]) for t in range(1, int(abs(halos[self.direction][self.side])) + 1)]
         final_equations = self.create_boundary_equations(arrays, arrays, transfer_indices)

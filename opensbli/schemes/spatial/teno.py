@@ -9,10 +9,12 @@ from opensbli.core.opensblifunctions import TenoDerivative
 from opensbli.core.opensbliobjects import ConstantObject, GroupedPiecewise
 from opensbli.core.grid import GridVariable
 from opensbli.schemes.spatial.scheme import Scheme
-from opensbli.schemes.spatial.weno import LLFCharacteristic, ShockCapturing
+from opensbli.schemes.spatial.weno import LFCharacteristic, ShockCapturing
+from opensbli.schemes.spatial.shock_capturing import HLLCCharacteristic
 from opensbli.core.kernel import ConstantsToDeclare as CTD
 from opensbli.equation_types.opensbliequations import OpenSBLIEq, SimulationEquations
 from sympy.functions.elementary.piecewise import ExprCondPair
+from opensbli.core.kernel import Kernel
 
 
 class TenoHalos(object):
@@ -209,7 +211,9 @@ class Teno5(object):
         tau_5 = Abs(RV.smoothness_symbols[0] - RV.smoothness_symbols[-1])
         for r in range(TC.n_stencils):
             RV.alpha_symbols += [Symbol('alpha_%d' % r)]
-            RV.alpha_evaluated.append((C + (tau_5/(self.eps + RV.smoothness_symbols[r])))**q)
+            RV.inv_beta_symbols += [Symbol('inv_beta_%d' % r)]
+            RV.inv_beta_evaluated += [1.0/(self.eps + RV.smoothness_symbols[r])]
+            RV.alpha_evaluated.append((C + (tau_5*RV.inv_beta_symbols[r]))**q)
         return
 
 
@@ -230,7 +234,9 @@ class Teno6(object):
         tau_6 = Abs(RV.smoothness_symbols[3] - Rational(1, 6)*(RV.smoothness_symbols[0] + RV.smoothness_symbols[2] - 4*RV.smoothness_symbols[1]))
         for r in range(TC.n_stencils):
             RV.alpha_symbols += [Symbol('alpha_%d' % r)]
-            RV.alpha_evaluated.append((C + (tau_6/(self.eps + RV.smoothness_symbols[r])))**q)
+            RV.inv_beta_symbols += [Symbol('inv_beta_%d' % r)]
+            RV.inv_beta_evaluated += [1.0/(self.eps + RV.smoothness_symbols[r])]
+            RV.alpha_evaluated.append((C + (tau_6*RV.inv_beta_symbols[r]))**q)
         return
 
 
@@ -243,6 +249,8 @@ class TenoReconstructionVariable(object):
         self.name = name
         self.smoothness_indicators = []
         self.smoothness_symbols = []
+        self.inv_beta_symbols = []
+        self.inv_beta_evaluated = []
         self.alpha_evaluated = []
         self.alpha_symbols = []
         self.inv_alpha_sum_symbols = []
@@ -265,6 +273,7 @@ class TenoReconstructionVariable(object):
 
         :arg object original: Reconstruction object variable, either left or right reconstruction."""
         self.smoothness_symbols += [GridVariable('%s' % (s)) for s in original.smoothness_symbols]
+        self.inv_beta_symbols += [GridVariable('%s' % (s)) for s in original.inv_beta_symbols]
         self.alpha_symbols += [GridVariable('%s' % (s)) for s in original.alpha_symbols]
         self.inv_alpha_sum_symbols += [GridVariable('%s' % (s)) for s in original.inv_alpha_sum_symbols]
         self.inv_omega_sum_symbols += [GridVariable('%s' % (s)) for s in original.inv_omega_sum_symbols]
@@ -278,14 +287,15 @@ class TenoReconstructionVariable(object):
             originals = []
             new = []
 
-        originals += original.smoothness_symbols + original.alpha_symbols + original.inv_alpha_sum_symbols + original.kronecker_symbols + original.inv_omega_sum_symbols
-        new += self.smoothness_symbols + self.alpha_symbols + self.inv_alpha_sum_symbols + self.kronecker_symbols + self.inv_omega_sum_symbols
+        originals += original.smoothness_symbols + original.inv_beta_symbols + original.alpha_symbols + original.inv_alpha_sum_symbols + original.kronecker_symbols + original.inv_omega_sum_symbols
+        new += self.smoothness_symbols + self.inv_beta_symbols + self.alpha_symbols + self.inv_alpha_sum_symbols + self.kronecker_symbols + self.inv_omega_sum_symbols
         subs_dict = dict(zip(originals, new))
 
         for key, value in original.function_stencil_dictionary.items():
             subs_dict[value] = self.function_stencil_dictionary[key]
 
         self.smoothness_indicators = [s.subs(subs_dict) for s in original.smoothness_indicators]
+        self.inv_beta_symbols = [s.subs(subs_dict) for s in original.inv_beta_symbols]
         # Only update tau_8 for right reconstructions
         if original.order == 8:
             if isinstance(self, LeftTenoReconstructionVariable):
@@ -294,6 +304,7 @@ class TenoReconstructionVariable(object):
                 self.tau_8_evaluated = [s.subs(subs_dict) for s in original.tau_8_evaluated]
 
         self.alpha_evaluated = [s.subs(subs_dict) for s in original.alpha_evaluated]
+        self.inv_beta_evaluated = [s.subs(subs_dict) for s in original.inv_beta_evaluated]
         self.inv_alpha_sum_evaluated = [s.subs(subs_dict) for s in original.inv_alpha_sum_evaluated]
         self.inv_omega_sum_evaluated = [s.subs(subs_dict) for s in original.inv_omega_sum_evaluated]
         self.kronecker_evaluated = [s.subs(subs_dict) for s in original.kronecker_evaluated]
@@ -304,15 +315,15 @@ class TenoReconstructionVariable(object):
         """ Adds the evaluations of the TENO quantities to the computational kernel.
 
         :arg object kernel: OpenSBLI Kernel for the TENO computation."""
-        all_symbols = self.smoothness_symbols + self.tau_8_symbol + self.alpha_symbols + self.inv_alpha_sum_symbols + self.kronecker_symbols + self.inv_omega_sum_symbols
-        all_evaluations = self.smoothness_indicators + self.tau_8_evaluated + self.alpha_evaluated + self.inv_alpha_sum_evaluated + self.kronecker_evaluated + self.inv_omega_sum_evaluated
+        all_symbols = self.smoothness_symbols + self.inv_beta_symbols + self.tau_8_symbol + self.alpha_symbols + self.inv_alpha_sum_symbols + self.kronecker_symbols + self.inv_omega_sum_symbols
+        all_evaluations = self.smoothness_indicators + self.inv_beta_evaluated + self.tau_8_evaluated + self.alpha_evaluated + self.inv_alpha_sum_evaluated + self.kronecker_evaluated + self.inv_omega_sum_evaluated
 
         final_equations = []
         for no, value in enumerate(all_symbols):
             final_equations += [OpenSBLIEq(value, all_evaluations[no], evaluate=False)]
         self.final_equations = final_equations
         rv = self.reconstructed_symbol
-        if "combine_reconstructions" in self.settings and self.settings["combine_reconstructions"]:
+        if "single_reconstruction_variable" in self.settings and self.settings["single_reconstruction_variable"]:
             self.final_equations += [OpenSBLIEq(rv, rv + self.reconstructed_expression)]
         else:
             self.final_equations += [OpenSBLIEq(rv, self.reconstructed_expression)]
@@ -356,6 +367,7 @@ class Teno(Scheme, ShockCapturing):
             raise NotImplementedError("Only 5th, 6th and 8th order TENO are currently implemented.")
         # Epsilon to avoid division by zero in non-linear weights
         WT.eps = ConstantObject('eps')
+        WT.eps.value = 1e-40
         CTD.add_constant(WT.eps)
         # Parameter to control the spectral properties of the TENO scheme
         if formulation == 'adaptive':
@@ -465,19 +477,28 @@ class Teno(Scheme, ShockCapturing):
         return
 
 
-class LLFTeno(LLFCharacteristic, Teno):
+class LFTeno(LFCharacteristic, Teno):
     """ Local Lax-Friedrichs flux splitting applied to characteristic variables using a TENO scheme.
 
     :arg int order: Order of the WENO/TENO scheme.
     :arg object averaging: The averaging procedure to be applied for characteristics, defaults to Simple averaging."""
 
-    def __init__(self, order, formulation=None, physics=None, averaging=None, sensor=None, store_sensor=False):
-        LLFCharacteristic.__init__(self, physics, averaging)
+    def __init__(self, order, formulation=None, physics=None, averaging=None, sensor=None, store_sensor=False, conservative=True, flux_type='LLF', flux_split=True, passive_scalar=False):
+        LFCharacteristic.__init__(self, physics, flux_split=flux_split, flux_type=flux_type, averaging=averaging)
         print("A TENO scheme of order %s is being used for shock capturing." % str(order))
         if sensor is None and formulation is not None:
             raise ValueError("Storage array for the shock sensor is required.")
         else:
             self.sensor_array = sensor
+        if flux_type == 'LLF':
+            print("Local Lax-Friedrich flux splitting.")
+        elif flux_type == 'GLF':
+            print("Global Lax-Friedrich flux splitting.")
+        else:
+            raise ValueError("Please select either LLF or GLF for the flux-splitting.")
+        self.passive_scalar = passive_scalar
+        self.flux_split = flux_split
+        self.conservative = conservative
         self.store_sensor = store_sensor
         Teno.__init__(self, order, formulation)
         self.formulation = formulation
@@ -495,6 +516,9 @@ class LLFTeno(LLFCharacteristic, Teno):
         Then TENO derivative class is instantiated with the flux at i+1/2 array --> Function in TENO scheme, called from in here
         Final derivatives are evaluated from Weno derivative class --> Using WD.discretise."""
         if isinstance(type_of_eq, SimulationEquations):
+            if self.flux_type == 'GLF':
+                EV_kernel = Kernel(block, computation_name="Global wave-speed reductions")
+                EV_kernel.set_grid_range(block)
             eqs = flatten(type_of_eq.equations)
             grouped = self.group_by_direction(eqs)
             all_derivatives_evaluated_locally = []
@@ -502,7 +526,7 @@ class LLFTeno(LLFCharacteristic, Teno):
             solution_vector = flatten(type_of_eq.time_advance_arrays)
 
             # Instantiate eigensystems with block, but don't add metrics yet
-            self.instantiate_eigensystem(block)
+            self.instantiate_eigensystem(block, self.passive_scalar)
             for direction, derivatives in sorted(grouped.items()):
                 # Create a work array for each component of the system
                 all_derivatives_evaluated_locally += derivatives
@@ -510,9 +534,11 @@ class LLFTeno(LLFCharacteristic, Teno):
                     deriv.create_reconstruction_work_array(block)
                 # Kernel for the reconstruction in this direction
                 kernel = self.create_reconstruction_kernel(direction, reconstruction_halos, block)
-                # Get the equations for a characteristic reconstruction
-                characteristic_eqns = self.get_characteristic_equations(direction, derivatives, solution_vector, block)
-                pre_process, interpolated, post_process = characteristic_eqns[0], characteristic_eqns[1], characteristic_eqns[2]
+                # Get the pre, interpolations and post equations for characteristic reconstruction
+                pre_process, reductions, interpolated, post_process = self.get_characteristic_equations(direction, derivatives, solution_vector, block)
+                if direction == 0 and len(reductions) > 0:
+                    EV_kernel.add_equation(reductions)
+                # Add the equations to the kernel and add the kernel to SimulationEquations
                 if self.formulation == 'adaptive':
                     # Calculate adaptive TENO_CT parameter and add to pre_process equations
                     adaptive_CT = self.create_adaptive_CT(direction, block)
@@ -522,6 +548,90 @@ class LLFTeno(LLFCharacteristic, Teno):
                 # Add the equations to the kernel and add the kernel to SimulationEquations
                 kernel.add_equation(pre_process + interpolated + post_process)
                 type_of_eq.Kernels += [kernel]
+
+            if self.flux_type == 'GLF':
+                type_of_eq.Kernels = [EV_kernel] + type_of_eq.Kernels
+            # Generate kernels for the constituent relations
+            if grouped:
+                constituent_relations = self.generate_constituent_relations_kernels(block)
+                type_of_eq.Kernels += [self.evaluate_residuals(block, eqs, all_derivatives_evaluated_locally)]
+                constituent_relations = self.check_constituent_relations(block, eqs, constituent_relations)
+            return constituent_relations
+
+class HLLCTeno(HLLCCharacteristic, Teno):
+    """ Local Lax-Friedrichs flux splitting applied to characteristic variables using a TENO scheme.
+
+    :arg int order: Order of the WENO/TENO scheme.
+    :arg object averaging: The averaging procedure to be applied for characteristics, defaults to Simple averaging."""
+
+    def __init__(self, order, formulation=None, physics=None, averaging=None, sensor=None, store_sensor=False, conservative=True, flux_type='HLLC', positivity_preservation=False, passive_scalar=False):
+        HLLCCharacteristic.__init__(self, physics, flux_type, averaging)
+        print("A TENO scheme of order %s is being used for shock capturing." % str(order))
+        if sensor is None and formulation is not None:
+            raise ValueError("Storage array for the shock sensor is required.")
+        else:
+            self.sensor_array = sensor
+        if flux_type == 'HLLC':
+            print("HLLC flux splitting.")
+        elif flux_type == 'HLLC-LM':
+            print("HLLC-LM flux splitting.")
+        else:
+            raise ValueError("Please select either HLLC or HLLC-LM for the flux-splitting.")
+        self.passive_scalar = passive_scalar
+        self.flux_type = flux_type
+        self.conservative = conservative
+        self.store_sensor = store_sensor
+        Teno.__init__(self, order, formulation)
+        self.formulation = formulation
+        # Variables used for the Nonlinear WENO filter only
+        self.sensor_evaluation = None 
+        self.shock_filter = False
+        return
+
+    def discretise(self, type_of_eq, block):
+        """ This is the place where the logic of vector form of equations are implemented.
+        Find physical fluxes by grouping derivatives by direction --> in central, copy over
+        Then the physical fluxes are transformed to characteristic space ---> a function in Characteristic
+        For each f+ and f-, find f_hat of i+1/2, i-1/2, (L+R) are evaluated  ----> Function in TENO scheme, called from in here
+        flux at i+1/2 evaluated -- > Function in TENO scheme
+        Then TENO derivative class is instantiated with the flux at i+1/2 array --> Function in TENO scheme, called from in here
+        Final derivatives are evaluated from Weno derivative class --> Using WD.discretise."""
+        if isinstance(type_of_eq, SimulationEquations):
+            if self.flux_type == 'GLF':
+                EV_kernel = Kernel(block, computation_name="Global wave-speed reductions")
+                EV_kernel.set_grid_range(block)
+            eqs = flatten(type_of_eq.equations)
+            grouped = self.group_by_direction(eqs)
+            all_derivatives_evaluated_locally = []
+            reconstruction_halos = self.reconstruction_halotype(self.order, reconstruction=True)
+            solution_vector = flatten(type_of_eq.time_advance_arrays)
+
+            # Instantiate eigensystems with block, but don't add metrics yet
+            self.instantiate_eigensystem(block, self.passive_scalar)
+            for direction, derivatives in sorted(grouped.items()):
+                # Create a work array for each component of the system
+                all_derivatives_evaluated_locally += derivatives
+                for no, deriv in enumerate(derivatives):
+                    deriv.create_reconstruction_work_array(block)
+                # Kernel for the reconstruction in this direction
+                kernel = self.create_reconstruction_kernel(direction, reconstruction_halos, block)
+                # Get the pre, interpolations and post equations for characteristic reconstruction
+                pre_process, reductions, interpolated, post_process = self.get_characteristic_equations(direction, derivatives, solution_vector, block)
+                if direction == 0 and len(reductions) > 0:
+                    EV_kernel.add_equation(reductions)
+                # Add the equations to the kernel and add the kernel to SimulationEquations
+                if self.formulation == 'adaptive':
+                    # Calculate adaptive TENO_CT parameter and add to pre_process equations
+                    adaptive_CT = self.create_adaptive_CT(direction, block)
+                    pre_process += adaptive_CT
+                    # Add the sensor evaluation to the required constituent relations
+                    self.update_constituent_relation_symbols([self.sensor_array.base], direction)
+                # Add the equations to the kernel and add the kernel to SimulationEquations
+                kernel.add_equation(pre_process + interpolated + post_process)
+                type_of_eq.Kernels += [kernel]
+
+            if self.flux_type == 'GLF':
+                type_of_eq.Kernels = [EV_kernel] + type_of_eq.Kernels
             # Generate kernels for the constituent relations
             if grouped:
                 constituent_relations = self.generate_constituent_relations_kernels(block)

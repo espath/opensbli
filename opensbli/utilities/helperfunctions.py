@@ -5,10 +5,11 @@
 """
 
 from opensbli.core.opensbliobjects import DataSet, ConstantIndexed, DataObject
-import h5py
 from opensbli.code_generation.opsc import rc
 from sympy import pprint
-
+from opensbli.core.datatypes import SimulationDataType
+from opensbli.core.datatypes import FloatC, Double
+import re
 
 def get_min_max_halo_values(halos):
     halo_m = []
@@ -29,6 +30,22 @@ def get_min_max_halo_values(halos):
     else:
         raise ValueError("")
 
+def debug_equation(ndim, input_eqns, direction):
+    """ Extracts only terms involving derivatives in the specified direction (0, 1, 2), for debugging purposes."""
+    output = []
+    from opensbli.schemes import Central
+    from sympy import simplify
+    c = Central(4)
+    original = input_eqns.rhs
+    grouped = c.group_by_direction([original])
+    subs_dict = {}
+    for dire in range(ndim):
+        if dire != direction:
+            derivatives = grouped[dire]
+            for der in derivatives:
+                subs_dict[der] = 0
+    output = simplify(original.subs(subs_dict))
+    return output
 
 def increment_dataset(expression, direction, value):
     """ Increments an expression containing datasets by the given increment and direction.
@@ -69,25 +86,27 @@ def get_inverse_deltas(delta):
         return rc.existing[delta]
     else:
         # Create a new inverse variable
-        name = rc.name
         b, exp = delta.as_base_exp()
-        rc.name = "inv_%d"
+        if (exp < -1):
+            name = 'inv' + str(abs(exp)) + str(b)
+            rc.name = name
+        else:
+            name = 'inv' + str(b)
+            rc.name = name
         inv_delta_name = rc.get_next_rational_constant(delta)
-        rc.name = name
         return inv_delta_name
-
 
 def set_hdf5_metadata(dset, halos, npoints, block):
     """ Function to set hdf5 metadata required by OPS to a dataset."""
-    if len(halos) != 2:
-        raise ValueError("Two halos should be provided for each dimension.")
+    if len(halos) != block.ndim:
+        raise ValueError("halos provided for hdf5 output should be of size %d" % block.ndim)
     for h in halos:
-        if len(h) != block.ndim:
-            raise ValueError("halos provided for hdf5 output should be of size %d" % block.ndim)
+        if len(h) != 2:
+            raise ValueError("Two halo values (minus, positive) should be provided for each dimension.")            
     # The size of negative halos as a list for all dimensions
-    d_m = [halos[i][0] for i in range(2)]
+    d_m = [halos[i][0] for i in range(block.ndim)]
     # The size of positive halos as a list for all dimensions
-    d_p = [halos[i][1] for i in range(2)]
+    d_p = [halos[i][1] for i in range(block.ndim)]
 
     dset.attrs.create("d_p", d_p, dtype="int32")
     dset.attrs.create("d_m", d_m, dtype="int32")
@@ -113,6 +132,7 @@ def output_hdf5(array, array_name, halos, npoints, block, **kwargs):
         fname = kwargs['filename']
     else:
         fname = "data.h5"
+    import h5py
     with h5py.File(fname, 'w') as hf:
         # Create a group
         g1 = hf.create_group(block.blockname)
@@ -143,48 +163,57 @@ def substitute_simulation_parameters(constants, values, simulation_name='opensbl
         for const, value in substitutions.items():
             old_str = const + '=Input;'
             if old_str in s:
+                # Literal floats based on the precision set in the simulation options
+                if isinstance(SimulationDataType.dtype(), FloatC):
+                    # Find doubles in the user input string for the value to set to the constant
+                    floats = [x for x in re.findall(r"[-+]?(?:\d*\.*\d+)", value) if '.' in x]
+                    for input_float in floats:
+                        value = value.replace(input_float, input_float + 'f')
                 new_str = const + ' = %s' % value + ';'
                 s = s.replace(old_str, new_str)
         f.write(s)
     return
 
-
-def dataset_attributes(dset):
-    """
-    Move to datasetbase? Should we??
-    """
-    dset.block_number = None
-    dset.read_from_hdf5 = False
-    dset.dtype = None
-    dset.size = None
-    dset.halo_ranges = None
-    dset.block_name = None
-    return dset
-
-
 def constant_attributes(const):
     const.is_input = True
-    const.dtype = None
+    const.datatype = None
     const.value = None
     return const
 
 
-def print_iteration_ops(simulation_name='opensbli', every=250, NaN_check=None):
+def print_iteration_ops(simulation_name='opensbli', every=100, NaN_check=None, nblocks=1):
     """ Prints the iteration number to standard output. If an array name is passed to NaNcheck
     then the OPS NaN_check is also called. Requires OPS versions since 01/03/2019."""
     file_path = "./%s.cpp" % simulation_name
     with open(file_path) as f:
         lines = f.readlines()
     for no, line in enumerate(lines):
-        check_string = "int iter=0;"
+        check_string = "for(iter"
         if check_string in line:
-            lines[no+1] = lines[no+1] + """if(fmod(iter+1, %d) == 0){
-        ops_printf("Iteration is %%d\\n", iter+1); """ % every
+            # Add average iteration time
+            lines[no-1] += """double inner_start, elapsed_inner_start;\n"""
+            lines[no-1] += """double inner_end, elapsed_inner_end;\n"""
+            lines[no-1] += """ops_timers(&inner_start, &elapsed_inner_start);\n"""
+            # Inside the condition
+            lines[no+2] += """if(fmod(iter+1, %d) == 0){
+        ops_timers(&inner_end, &elapsed_inner_end);
+        ops_printf("Iteration: %%d. Time-step: %%.3e. Simulation time: %%.5f. Time/iteration: %%lf.\\n", iter+1, dt, simulation_time, (elapsed_inner_end - elapsed_inner_start)/%d);"""  % (every, every)
             if NaN_check is not None:
-                lines[no+1] = lines[no+1] + """
-        ops_NaNcheck(%s);\n}\n""" % NaN_check
+                for i in range(nblocks):
+                    if '_B%d' % i in NaN_check:
+                        name = NaN_check
+                    else:
+                        name = NaN_check + '_B%d' % i
+                    if i == 0:
+                        lines[no+2] += """
+        ops_NaNcheck(%s);\n""" % name
+                    else:
+                        lines[no+2] += """        ops_NaNcheck(%s);\n""" % name
+                lines[no+2] += """        ops_timers(&inner_start, &elapsed_inner_start);\n"""
+
+                lines[no+2] += """}\n""" 
             else:
-                lines[no+1] = lines[no+1] + """\n}\n"""
+                lines[no+2] += """\n}\n"""
     with open(file_path, 'w') as f:
         f.write(''.join(lines))
     return

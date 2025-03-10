@@ -7,11 +7,12 @@
 from sympy import IndexedBase, Symbol, Rational, solve, interpolating_poly, integrate, Abs, Float, flatten, S
 from opensbli.core.opensblifunctions import WenoDerivative
 from opensbli.core.opensbliobjects import ConstantObject
+from opensbli.core.kernel import Kernel
 from opensbli.equation_types.opensbliequations import SimulationEquations, OpenSBLIEq, NonSimulationEquations
-from opensbli.core.grid import GridVariable
+from opensbli.core.grid import GridVariable as gv
 from .scheme import Scheme
 from sympy import horner, pprint
-from opensbli.schemes.spatial.shock_capturing import ShockCapturing, LLFCharacteristic
+from opensbli.schemes.spatial.shock_capturing import ShockCapturing, LFCharacteristic, HLLCCharacteristic
 
 
 class WenoHalos(object):
@@ -212,6 +213,7 @@ class WenoReconstructionVariable(object):
 
     def __init__(self, name):
         self.name = name
+        # self.side = side
         self.smoothness_indicators = []
         self.smoothness_symbols = []
         self.alpha_evaluated = []
@@ -222,17 +224,17 @@ class WenoReconstructionVariable(object):
         self.omega_symbols = []
         self.function_stencil_dictionary = {}
         self.reconstructed_expression = None
-        self.reconstructed_symbol = GridVariable('%s' % (name))
+        self.reconstructed_symbol = gv('%s' % (name))
         return
 
     def update_quantities(self, original):
         """ Updates the quantities required by WENO in the reconstruction variable.
 
         :arg object original: Reconstruction object variable, either left or right reconstruction."""
-        self.smoothness_symbols += [GridVariable('%s' % (s)) for s in original.smoothness_symbols]
-        self.alpha_symbols += [GridVariable('%s' % (s)) for s in original.alpha_symbols]
-        self.inv_alpha_sum_symbols += [GridVariable('%s' % (s)) for s in original.inv_alpha_sum_symbols]
-        self.omega_symbols += [GridVariable('%s' % (s)) for s in original.omega_symbols]
+        self.smoothness_symbols += [gv('%s' % (s)) for s in original.smoothness_symbols]
+        self.alpha_symbols += [gv('%s' % (s)) for s in original.alpha_symbols]
+        self.inv_alpha_sum_symbols += [gv('%s' % (s)) for s in original.inv_alpha_sum_symbols]
+        self.omega_symbols += [gv('%s' % (s)) for s in original.omega_symbols]
 
         subs_dict = dict(zip(original.smoothness_symbols+original.alpha_symbols+original.inv_alpha_sum_symbols + original.omega_symbols, self.smoothness_symbols+self.alpha_symbols+self.inv_alpha_sum_symbols+self.omega_symbols))
         for key, value in original.function_stencil_dictionary.items():
@@ -253,10 +255,15 @@ class WenoReconstructionVariable(object):
             final_equations += [OpenSBLIEq(value, all_evaluations[no])]
         self.final_equations = final_equations
         rv = self.reconstructed_symbol
-        if "combine_reconstructions" in self.settings and self.settings["combine_reconstructions"]:
+        if self.settings["shock_filter"]: # Apply WENO once at the end of a full time-step as a filter
+            number = int(str(self.reconstructed_symbol).split('_')[-1]) # get the index
+            # self.final_equations += [OpenSBLIEq(rv, rv + gv('rj%d' % number)*self.reconstructed_expression)]
             self.final_equations += [OpenSBLIEq(rv, rv + self.reconstructed_expression)]
-        else:
-            self.final_equations += [OpenSBLIEq(rv, self.reconstructed_expression)]
+        else: # Regular WENO application
+            if "single_reconstruction_variable" in self.settings and self.settings["single_reconstruction_variable"]:
+                self.final_equations += [OpenSBLIEq(rv, rv + self.reconstructed_expression)]
+            else:
+                self.final_equations += [OpenSBLIEq(rv, self.reconstructed_expression)]
         return
 
 
@@ -283,7 +290,7 @@ class RightWenoReconstructionVariable(WenoReconstructionVariable):
 class WenoZ(object):
     def __init__(self, k):
         self.k = k
-        self.eps = 1.0e-14
+        self.eps = 1.0e-40
         return
 
     def global_smoothness_indicator(self, RV):
@@ -440,15 +447,15 @@ class Weno(Scheme, ShockCapturing):
         import numpy
         if normalised:
             theta = ConstantObject('sensor_theta')
-            theta.value = 4.0
+            theta.value = 1
             for L in range(self.k):
-                formula += Abs(GridVariable('omega_%d' % L)/opt_weights[L] - 1.0)**theta
-            denominator = Abs(1.0/numpy.min(opt_weights) - 1.0)**theta + (self.k-1)
-            sensor_equation = OpenSBLIEq(GridVariable('rj'), formula/denominator)          
+                formula += Abs(gv('omega_%d' % L)/opt_weights[L] - 1.0)
+            denominator = Abs(1.0/numpy.min(opt_weights) - 1.0) + (self.k-1)
+            sensor_equation = OpenSBLIEq(gv('rj'), formula/denominator)          
         else:
             for r in range(self.k):
-                formula += Abs(GridVariable('omega_%d' % r)  - opt_weights[r])
-            sensor_equation = OpenSBLIEq(GridVariable('rj'), formula)
+                formula += Abs(gv('omega_%d' % r)  - opt_weights[r])
+            sensor_equation = OpenSBLIEq(gv('rj'), formula)
         return sensor_equation
 
     def generate_reconstruction(self, RV, WenoConfig):
@@ -465,16 +472,28 @@ class Weno(Scheme, ShockCapturing):
         return
 
 
-class LLFWeno(LLFCharacteristic, Weno):
+class LFWeno(LFCharacteristic, Weno):
     """ Performs the Local Lax Friedrichs flux splitting with a WENO scheme.
 
     :arg int order: Order of the WENO/TENO scheme.
     :arg object physics: Physics object, defaults to NSPhysics.
     :arg object averaging: The averaging procedure to be applied for characteristics, defaults to Simple averaging. """
 
-    def __init__(self, order, physics=None, averaging=None, shock_filter=None, formulation="JS"):
-        print("Local Lax-Friedrich flux splitting.")
-        LLFCharacteristic.__init__(self, physics, averaging)
+    def __init__(self, order, physics=None, averaging=None, shock_filter=None, formulation="JS", conservative=True, flux_type='LLF', flux_split=True, species=None):
+        if flux_type == 'LLF':
+            print("Local Lax-Friedrich flux splitting.")
+        elif flux_type == 'GLF':
+            print("Global Lax-Friedrich flux splitting.")
+        else:
+            raise ValueError("Please select either LLF or GLF for the flux-splitting.")
+        # Check WENO order
+        if (order % 2 == 0):
+            raise ValueError("Please set an odd-order for the WENO scheme, currently {} is not supported".format(order))
+        self.species = species
+        self.flux_type = flux_type
+        self.temp_wk_arrays = {}
+        LFCharacteristic.__init__(self, physics, flux_split=flux_split, flux_type=flux_type, averaging=averaging, shock_filter=shock_filter)
+        self.conservative = conservative
         if shock_filter is not None:
             self.shock_filter = shock_filter
             self.sensor_evaluation = Weno.__init__(self, order, formulation)
@@ -491,7 +510,13 @@ class LLFWeno(LLFCharacteristic, Weno):
         flux at i+1/2 evaluated -- > Function in WENO scheme
         Then WENO derivative class is instantiated with the flux at i+1/2 array --> Function in WENO scheme, called from in here
         Final derivatives are evaluated from Weno derivative class --> Using WD.discretise."""
+        # Reduction kernel to compute the eigenvalues for the global LF splitting.
+
+
         if isinstance(type_of_eq, SimulationEquations):
+            if self.flux_type == 'GLF':
+                EV_kernel = Kernel(block, computation_name="Global wave-speed reductions")
+                EV_kernel.set_grid_range(block)
             eqs = flatten(type_of_eq.equations)
             grouped = self.group_by_direction(eqs)
             all_derivatives_evaluated_locally = []
@@ -499,7 +524,7 @@ class LLFWeno(LLFCharacteristic, Weno):
             solution_vector = flatten(type_of_eq.time_advance_arrays)
 
             # Instantiate eigensystems with block, but don't add metrics yet
-            self.instantiate_eigensystem(block)
+            self.instantiate_eigensystem(block, self.species)
 
             for direction, derivatives in sorted(grouped.items()):
                 # Create a work array for each component of the system
@@ -509,17 +534,135 @@ class LLFWeno(LLFCharacteristic, Weno):
                 # Kernel for the reconstruction in this direction
                 kernel = self.create_reconstruction_kernel(direction, reconstruction_halos, block)
                 # Get the pre, interpolations and post equations for characteristic reconstruction
-                pre_process, interpolated, post_process = self.get_characteristic_equations(direction, derivatives, solution_vector, block)
+                pre_process, reductions, interpolated, post_process = self.get_characteristic_equations(direction, derivatives, solution_vector, block)            
+                if direction == 0 and len(reductions) > 0:
+                    EV_kernel.add_equation(reductions)
                 # Add the equations to the kernel and add the kernel to SimulationEquations
                 kernel.add_equation(pre_process + interpolated + post_process)
+
                 type_of_eq.Kernels += [kernel]
+            if self.flux_type == 'GLF':
+                type_of_eq.Kernels = [EV_kernel] + type_of_eq.Kernels
             # Generate kernels for the constituent relations
             if grouped:
                 constituent_relations = self.generate_constituent_relations_kernels(block)
                 type_of_eq.Kernels += [self.evaluate_residuals(block, eqs, all_derivatives_evaluated_locally)]
                 constituent_relations = self.check_constituent_relations(block, eqs, constituent_relations)
             return constituent_relations
-        # Apply WENO as a non-linear filter step
+
+        # Apply WENO as a non-linear filter step instead
+        elif isinstance(type_of_eq, NonSimulationEquations):
+            eqs = flatten(type_of_eq.equations)
+            grouped = self.group_by_direction(eqs)
+            all_derivatives_evaluated_locally = []
+            reconstruction_halos = self.reconstruction_halotype(self.order, reconstruction=True)
+            solution_vector = flatten(type_of_eq.time_advance_arrays)
+            # Instantiate eigensystems with block, but don't add metrics yet
+            self.instantiate_eigensystem(block, self.species)
+            for direction, derivatives in sorted(grouped.items()):
+                all_derivatives_evaluated_locally += derivatives
+                for no, deriv in enumerate(derivatives):
+                    deriv.create_reconstruction_work_array(block)
+                # Kernel for the reconstruction in this direction
+                kernel = self.create_reconstruction_kernel(direction, reconstruction_halos, block)
+                # Get the pre, interpolations and post equations for characteristic reconstruction
+                pre_process, reductions, interpolated, post_process = self.get_characteristic_equations(direction, derivatives, solution_vector, block)
+                if direction == 0:
+                    reduction_output = reductions
+                # Add the equations to the kernel and add the kernel to SimulationEquations
+                kernel.add_equation(pre_process + interpolated + post_process)
+                type_of_eq.reconstruction_kernels += [kernel]
+            # type_of_eq.reconstruction_kernels = [EV_kernel] + type_of_eq.reconstruction_kernels
+            # Generate kernels for the constituent relations
+            if grouped:
+                # constituent_relations = self.generate_constituent_relations_kernels(block)
+                constituent_relations = None
+                type_of_eq.residual_kernels += [self.evaluate_residuals(block, eqs, all_derivatives_evaluated_locally)]
+                # constituent_relations = self.check_constituent_relations(block, eqs, constituent_relations)
+            return constituent_relations, solution_vector, reduction_output
+
+
+
+class HLLCWeno(HLLCCharacteristic, Weno):
+    """ Performs the Local Lax Friedrichs flux splitting with a WENO scheme.
+
+    :arg int order: Order of the WENO/TENO scheme.
+    :arg object physics: Physics object, defaults to NSPhysics.
+    :arg object averaging: The averaging procedure to be applied for characteristics, defaults to Simple averaging. """
+
+    def __init__(self, order, physics=None, averaging=None, shock_filter=None, formulation="JS", conservative=True, flux_type='HLLC', flux_split=False):
+        # Check WENO order
+        if (order % 2 == 0):
+            raise ValueError("Please set an odd-order for the WENO scheme, currently {} is not supported".format(order))
+        if flux_type == 'HLLC':
+            print("HLLC flux splitting.")
+        elif flux_type == 'HLLC-LM':
+            print("HLLC-LM flux splitting.")
+        else:
+            raise ValueError("Please select either HLLC or HLLC-LM for the flux-splitting.")
+        self.species = None
+        self.flux_type = flux_type
+        self.flux_split = False # No flux split into WENO for HLLC solver
+        self.temp_wk_arrays = {}
+        HLLCCharacteristic.__init__(self, physics, shock_filter=shock_filter, flux_type=flux_type, averaging=averaging)
+        self.conservative = conservative
+        if shock_filter is not None:
+            self.shock_filter = shock_filter
+            self.sensor_evaluation = Weno.__init__(self, order, formulation)
+        else:
+            Weno.__init__(self, order, formulation)
+            self.sensor_evaluation = None
+        return
+
+    def discretise(self, type_of_eq, block):
+        """ This is the place where the logic of vector form of equations are implemented.
+        Find physical fluxes by grouping derivatives by direction --> in central, copy over
+        Then the physical fluxes are transformed to characteristic space ---> a function in Characteristic
+        For each f+ and f-, find f_hat of i+1/2, i-1/2, (L+R) are evaluated  ----> Function in WENO scheme, called from in here
+        flux at i+1/2 evaluated -- > Function in WENO scheme
+        Then WENO derivative class is instantiated with the flux at i+1/2 array --> Function in WENO scheme, called from in here
+        Final derivatives are evaluated from Weno derivative class --> Using WD.discretise."""
+        # Reduction kernel to compute the eigenvalues for the global LF splitting.
+
+
+        if isinstance(type_of_eq, SimulationEquations):
+            if self.flux_type == 'GLF':
+                EV_kernel = Kernel(block, computation_name="Global wave-speed reductions")
+                EV_kernel.set_grid_range(block)
+            eqs = flatten(type_of_eq.equations)
+            grouped = self.group_by_direction(eqs)
+            all_derivatives_evaluated_locally = []
+            reconstruction_halos = self.reconstruction_halotype(self.order, reconstruction=True)
+            solution_vector = flatten(type_of_eq.time_advance_arrays)
+
+            # Instantiate eigensystems with block, but don't add metrics yet
+            self.instantiate_eigensystem(block, self.species)
+
+            for direction, derivatives in sorted(grouped.items()):
+                # Create a work array for each component of the system
+                all_derivatives_evaluated_locally += derivatives
+                for no, deriv in enumerate(derivatives):
+                    deriv.create_reconstruction_work_array(block)
+                # Kernel for the reconstruction in this direction
+                kernel = self.create_reconstruction_kernel(direction, reconstruction_halos, block)
+                # Get the pre, interpolations and post equations for characteristic reconstruction
+                pre_process, reductions, interpolated, post_process = self.get_characteristic_equations(direction, derivatives, solution_vector, block)             
+                if direction == 0 and len(reductions) > 0:
+                    EV_kernel.add_equation(reductions)
+                # Add the equations to the kernel and add the kernel to SimulationEquations
+                kernel.add_equation(pre_process + interpolated + post_process)
+
+                type_of_eq.Kernels += [kernel]
+            if self.flux_type == 'GLF':
+                type_of_eq.Kernels = [EV_kernel] + type_of_eq.Kernels
+            # Generate kernels for the constituent relations
+            if grouped:
+                constituent_relations = self.generate_constituent_relations_kernels(block)
+                type_of_eq.Kernels += [self.evaluate_residuals(block, eqs, all_derivatives_evaluated_locally)]
+                constituent_relations = self.check_constituent_relations(block, eqs, constituent_relations)
+            return constituent_relations
+
+        # Apply WENO as a non-linear filter step instead
         elif isinstance(type_of_eq, NonSimulationEquations):
             eqs = flatten(type_of_eq.equations)
             grouped = self.group_by_direction(eqs)
@@ -535,14 +678,17 @@ class LLFWeno(LLFCharacteristic, Weno):
                 # Kernel for the reconstruction in this direction
                 kernel = self.create_reconstruction_kernel(direction, reconstruction_halos, block)
                 # Get the pre, interpolations and post equations for characteristic reconstruction
-                pre_process, interpolated, post_process = self.get_characteristic_equations(direction, derivatives, solution_vector, block)
+                pre_process, reductions, interpolated, post_process = self.get_characteristic_equations(direction, derivatives, solution_vector, block)
+                if direction == 0:
+                    reduction_output = reductions
                 # Add the equations to the kernel and add the kernel to SimulationEquations
                 kernel.add_equation(pre_process + interpolated + post_process)
                 type_of_eq.reconstruction_kernels += [kernel]
+            # type_of_eq.reconstruction_kernels = [EV_kernel] + type_of_eq.reconstruction_kernels
             # Generate kernels for the constituent relations
             if grouped:
                 # constituent_relations = self.generate_constituent_relations_kernels(block)
                 constituent_relations = None
                 type_of_eq.residual_kernels += [self.evaluate_residuals(block, eqs, all_derivatives_evaluated_locally)]
                 # constituent_relations = self.check_constituent_relations(block, eqs, constituent_relations)
-            return constituent_relations, solution_vector
+            return constituent_relations, solution_vector, reduction_output

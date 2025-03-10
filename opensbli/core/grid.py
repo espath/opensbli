@@ -195,20 +195,20 @@ class Grid(WorkDataSet):
         [idx_B1[0], idx_B1[1]]
 
         """
-        self.define_control_parameters()
+        # self.define_control_parameters()
         return
 
-    def define_control_parameters(self):
-        """Not used, these should be used for further optimisations
-        """
-        # Parameters for optimizations / different schemes for convective and viscous fluxes
-        self.store_derivatives = True  # By default store derivatives is set to true
-        self.derivatives_to_store = set()
-        self.group_derivatives = False  # This is another way of reducing data transfer.
-        self.local_variables = True
-        self.cns_type_code = False  # This writes the code similat to traditional compressible NS
-        self.sbli_rhs_discretisation = False  # this is a pilot implementation of SBLI RHS
-        return
+    # def define_control_parameters(self):
+    #     """Not used, these should be used for further optimisations
+    #     """
+    #     # Parameters for optimizations / different schemes for convective and viscous fluxes
+    #     self.store_derivatives = True  # By default store derivatives is set to true
+    #     self.derivatives_to_store = set()
+    #     self.group_derivatives = False  # This is another way of reducing data transfer.
+    #     self.local_variables = True
+    #     self.cns_type_code = False  # This writes the code similat to traditional compressible NS
+    #     self.sbli_rhs_discretisation = False  # this is a pilot implementation of SBLI RHS
+    #     return
 
 
 class GridVariable(Symbol):

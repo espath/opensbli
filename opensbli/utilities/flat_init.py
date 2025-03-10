@@ -1,18 +1,93 @@
 from opensbli.utilities.numerical_functions import spline, splint
-from sympy import Piecewise, pprint
-from scipy.integrate import odeint
+from sympy import Piecewise
+from scipy.integrate import solve_ivp
 import numpy as np
 import numpy.polynomial.polynomial as poly
 import matplotlib.pyplot as plt
-from opensbli.equation_types.opensbliequations import OpenSBLIEq
+from opensbli.initialisation import GridBasedInitialisation
 from opensbli.core.opensbliobjects import DataObject, ConstantObject
 from opensbli.core.grid import GridVariable
+from opensbli.core.kernel import Kernel
 import warnings
-# from scipy.optimize import curve_fit
-
+from opensbli.equation_types.opensbliequations import OpenSBLIEq
 
 plt.style.use('classic')
 
+class Newton_Main():
+
+    # init method or constructor
+    def __init__(self, req_tol, tol, delta):
+        self.req_tol = req_tol
+        self.tol = tol
+        self.delta = delta
+
+    def constants(self, eta_max, eta_points, sigma, gw, fwall):
+        self.eta_max = eta_max
+        self.eta_points = eta_points
+        self.time_array = np.linspace(0, eta_max, eta_points)
+
+        self.sigma = sigma
+        self.gw = gw
+        self.fwall = fwall
+
+    def define_inputs(self, ode, ini_con, guess, pos_ini, boundary, pos_bd):
+        self.ode = ode
+        self.ini_con = ini_con
+        self.guess = guess
+        self.pos_ini = pos_ini
+        self.boundary = boundary
+        self.pos_bd = pos_bd
+
+    # solve with newton method
+    def solve_newton(self):
+        # print('Solving for initial solutions')
+        tolerance_stop = 1
+
+        while tolerance_stop > self.req_tol: 
+            # create a p matrix
+            p_mat_size = (len(self.pos_bd),len(self.pos_bd))
+            p_matrix = np.zeros(p_mat_size)
+
+            boundary_array = []
+            r_array = np.zeros(len(self.pos_bd))
+
+            # assign variables
+            for i in range(0, len(self.pos_ini)):
+                self.ini_con[self.pos_ini[i]] = self.guess[i]
+
+            # create delta matrix
+            del_mat_size = (len(self.pos_ini)+1,len(self.ini_con))
+            delta_matrix = np.zeros(del_mat_size)
+
+            for g in range(0,len(self.pos_ini)):
+                delta_matrix[g+1, self.pos_ini[g]] = self.delta
+            
+            y_initial = self.ini_con + delta_matrix
+
+            for yi in range(0, len(y_initial)):
+                # print(y_initial[yi, :])
+                extract_cond = y_initial[yi, :]
+                ini_conditions = extract_cond.tolist()
+
+                ode_solution = solve_ivp(self.ode, [self.time_array[0], self.time_array[-1]], ini_conditions, t_eval = self.time_array, dense_output = 'true', rtol = 1e-10, atol = 1e-10, max_step = 0.01)
+
+                boundary_array.append(ode_solution.y[:, -1])
+
+            for p in range(0, len(self.pos_bd)):
+                for  o in range(0, len(self.pos_bd)):
+                    p_matrix[p, o] = (boundary_array[o+1][self.pos_bd[p]] - boundary_array[0][self.pos_bd[p]])/self.delta
+                
+                r_array[p] = self.boundary[p] - boundary_array[0][self.pos_bd[p]]
+
+            resolve = np.linalg.solve(p_matrix, r_array.T)
+            self.guess = self.guess + resolve.T
+            
+            # monitor tolerance
+            tolerance_stop = abs(r_array[0])
+
+    def new_ini(self):
+        # print('------------------------------------ Returing calculated initial conditions in their respective positions')
+        return self.ini_con 
 
 class Boundary_layer_profile(object):
     """ Performs a similarity solution (Viscous fluid flow, F.White 1974),
@@ -31,20 +106,16 @@ class Boundary_layer_profile(object):
         self.n = np.size(self.y)
         return
 
-    def compbl(self, v, p=None):
-        """ Sets up the system of equations to be integrated by odeint.
-
-        :arg ndarray: v: Solution vector.
-        :arg None: p: Empty dummy argument required by the odeint function.
-        :returns: list: dv: System of equations."""
+    def compbl(self, t, y):
+        
         suth = self.suth
-        c = np.sqrt(v[3])*(1.0+suth)/(v[3]+suth)
-        dcdg = 1.0/(2.0*np.sqrt(v[3])) - np.sqrt(v[3])/(v[3]+suth)
-        dcdg *= (1.0+suth) / (v[3]+suth)
-        cp = dcdg*v[4]
-        dv = [v[1], v[2], -v[2]*(cp+v[0])/c, v[4],
-              -v[4]*(cp+self.pr*v[0])/c - self.pr*(self.gama-1)*self.xmach**2 * v[2]**2]
-        return dv
+        c = np.sqrt(y[3])*(1.0+suth)/(y[3]+suth)
+        dcdg = 1.0/(2.0*np.sqrt(y[3])) - np.sqrt(y[3])/(y[3]+suth)
+        dcdg *= (1.0+suth) / (y[3]+suth)
+        cp = dcdg*y[4]
+
+        return [y[1], y[2], -y[2]*(cp+y[0])/c, y[4], -y[4]*(cp+self.pr*y[0])/c - self.pr*(self.gama-1)*self.xmach**2 * y[2]**2]
+
 
     def generate_boundary_layer_profile(self, xmach, pr, gama, Tw, Tinf, Re):
         """ Generates a boundary layer initial profile. Solves the mean flow
@@ -57,85 +128,56 @@ class Boundary_layer_profile(object):
         :arg float Tinf: Freestream reference temperature (Kelvin)
         :arg float Re: Reynolds number."""
 
-        n_iter, jmax = 5, 1001
-        v, dv, f, f1, f2 = np.zeros(2), np.zeros(2), np.zeros(2), np.zeros(2), np.zeros(2)
-        self.pr, self.gama, self.xmach, self.Re, self.Tw = pr, gama, xmach, Re, Tw
-        self.nvisc = 1  # 1 Sutherlands law, 2 Power law, 3 Chapman-Rubesin approximation.
-        etamax = 10.0
-        nstep = jmax-1
-        errtol = 1e-10
-        self.suth = 110.40/Tinf  # Sutherland constant
-        self.soln = np.zeros((5, jmax))
-        self.eta = np.linspace(0, etamax, jmax)
-        vstart = np.zeros(5)
-        if Tw > 0:
-            vstart[3] = Tw
-        elif Tw < 0:  # Adiabatic wall, initial guess
-            v[1] = 1.0 + 0.5*0.84*(gama-1)*xmach**2
-            v[0] = 0.47*v[1]**0.21
-        else:  # Fixed wall temperature, initial guess. Tested for 1<Tw<4 and M<8 (Pr=0.72, gamma=1.4)
-            v[1] = 4.5  # !0.062*xmach**2-0.1*(Tw-1.0)*(1.0+xmach)/(0.2+xmach)
-            v[0] = 0.494891  # !0.45-0.01*xmach+(Tw-1.)*0.06
-        # Initial increments
-        dv[0] = v[0]*0.01
-        if Tw < 0:
-            dv[1] = v[1]*0.01
+        # self.nvisc = 1  # 1 Sutherlands law, 2 Power law, 3 Chapman-Rubesin approximation.
+        self.pr, self.gama, self.xmach, self.Re, Tw = pr, gama, xmach, Re, Tw
+        
+        if Tw == -1:
+            self.adiabatic = True
+            self.Tw = 1.0 
+            print('Setting conditions for an adiabatic wall')
+
+            etamax, jmax = 10.0, 1041
+            nstep = jmax - 1
+            self.suth = 110.4/Tinf # sutherland's constant
+            self.time_array = np.linspace(0, etamax, jmax)
+
         else:
-            dv[1] = 0.1
-        # Main loop
-        # ODE solver parameters
-        abserr = 1.0e-8
-        relerr = 1.0e-6
-        for k in range(n_iter):
-            vstart[2] = v[0]  # Initial value
-            if Tw < 0:
-                vstart[3] = v[1]
-            else:
-                vstart[4] = 1.141575  # v[1]
-            # Call the ODE solver.
-            self.soln = odeint(self.compbl, vstart, self.eta,
-                               atol=abserr, rtol=relerr).T
-            err = np.abs(self.soln[1, nstep]-1.0) + np.abs(self.soln[3, nstep]-1.0)
-            if err < errtol:
-                break
-            f[0] = self.soln[1, nstep] - 1.0
-            f[1] = self.soln[3, nstep] - 1.0
-            # Increment v[0]
-            vstart[2] = v[0] + dv[0]
-            if (Tw < 0):
-                vstart[3] = v[1]
-            else:
-                vstart[4] = v[1]
-            self.soln = odeint(self.compbl, vstart, self.eta,
-                               atol=abserr, rtol=relerr).T
-            f1[0] = self.soln[1, nstep] - 1.0
-            f1[1] = self.soln[3, nstep] - 1.0
-            # Increment v[1]
-            vstart[2] = v[0]
-            if (Tw < 0):
-                vstart[3] = v[1] + dv[1]
-            else:
-                vstart[4] = v[1] + dv[1]
-            self.soln = odeint(self.compbl, vstart, self.eta,
-                               atol=abserr, rtol=relerr).T
-            f2[0] = self.soln[1, nstep] - 1.0
-            f2[1] = self.soln[3, nstep] - 1.0
-            # Solve the linear system
-            al11 = (f1[0] - f[0])/dv[0]
-            al21 = (f1[1] - f[1])/dv[0]
-            al12 = (f2[0] - f[0])/dv[1]
-            al22 = (f2[1] - f[1])/dv[1]
-            det = float(al11*al22 - al21*al12)
-            # New dv for improved solution
-            dv[0] = (-al22*f[0] + al12*f[1])/det
-            dv[1] = (al21*f[0] - al11*f[1])/det
-            v[0] += dv[0]
-            v[1] += dv[1]
-            # Write out improved estimate
-        #     print 'it   ', k, dv[0], dv[1], v[0], v[1]
-        # print "final vaues ", v[0], v[1], err
+            self.adiabatic = False
+            self.Tw = Tw
+            print('Setting conditions for an isothermal wall with wall temperature, Tw =',Tw)
+
+            etamax, jmax = 20.0, 1041
+            nstep = jmax - 1
+            self.suth = 110.4/Tinf # sutherland's constant
+            self.time_array = np.linspace(0, etamax, jmax)
+
+        sigma, gw, fwall = 0.72, self.Tw, 0.0
+
+        # newton method to get initial conditions
+        fn_newton = Newton_Main(1e-9, 1e-10, 1e-3)
+        fn_newton.constants(etamax, jmax, sigma, gw, fwall)
+
+        if self.adiabatic == True:
+            fn_newton.define_inputs(self.compbl, [0, 0, 0, gw, 0], [0.2, 10.0], [2, 3], [1, 1], [1, 3])
+        else:
+            fn_newton.define_inputs(self.compbl, [0, 0, 0, gw, 0], [0.2, 10.0], [2, 4], [1, 1], [1, 3])
+
+        fn_newton.solve_newton()
+        initial_conditions_newton = fn_newton.new_ini()
+        
+        etamax, jmax = 10.0, 1001
+        nstep = jmax - 1
+        self.suth = 110.4/Tinf # sutherland's constant
+        self.time_array = np.linspace(0, etamax, jmax)
+
+        ode_mtd1 = solve_ivp(self.compbl, [self.time_array[0], self.time_array[-1]], initial_conditions_newton, t_eval = self.time_array, dense_output = 'true', rtol = 1e-8, atol = 1e-8, max_step = 0.02)
+
+        self.eta = ode_mtd1.t
+        self.f, self.df, self.ddf = ode_mtd1.y[0], ode_mtd1.y[1], ode_mtd1.y[2]
+        self.g, self.dg = ode_mtd1.y[3], ode_mtd1.y[4]
+
         # Save the wall temperature value
-        self.Twall = v[1]
+        self.Twall = self.g[0]
         print("The wall temperature is :", self.Twall)
         y, u, T, scale_factor = self.integrate_boundary_layer(nstep)
         self.scale_factor = scale_factor
@@ -156,11 +198,11 @@ class Boundary_layer_profile(object):
         d_eta = self.eta[1]*0.5
         # self.soln[1,:] is the u velocity, should be 1 in free stream
         for i in range(1, n+1):
-            z[i] = z[i-1] + d_eta*(self.soln[3, i] + self.soln[3, i-1])
-            dm = self.soln[3, i-1] - self.soln[1, i-1]
-            dd = self.soln[3, i] - self.soln[1, i]
+            z[i] = z[i-1] + d_eta*(self.g[i] + self.g[i-1])
+            dm = self.g[i-1]- self.df[i-1]
+            dd = self.g[i] - self.df[i]
             sumd += d_eta*(dd+dm)
-            if(self.soln[1, i] > 0.999 and record_z < 1.0):
+            if(self.df[i] > 0.999 and record_z < 1.0):
                 # print "recording at iteration: ", i
                 # dlta = z[i]
                 record_z = 2.0
@@ -169,7 +211,8 @@ class Boundary_layer_profile(object):
         # print("conversion factor is: ", scale)
         # print("scaled delta is: ", dlta/scale)
         # Rescale with displacement thickness and convert to FLOWER variable normalisation
-        y, u, T = z/scale, self.soln[1, :], self.soln[3, :]
+
+        y, u, T = z/scale, self.df[:], self.g[:]
         # Calculate du/dy at the wall
         dy = y[1]
         # self.dudy = (-3*u[0]+4*u[1]-u[2])/(2.0*dy)
@@ -177,9 +220,7 @@ class Boundary_layer_profile(object):
         self.dTdy = (-1.83333333333334*T[0]+3.00000000000002*T[1]-1.50000000000003*T[2]+0.333333333333356*T[3]-8.34657956545823e-15*T[4]+1.06910315192207e-15*T[5])/dy
         return y, u, T, scale
 
-
-from opensbli.initialisation import GridBasedInitialisation
-class Initialise_Katzer(GridBasedInitialisation):
+class Initialise_Flatplate(GridBasedInitialisation):
     """ Generates the initialiastion equations for the boundary-layer profile.
 
     :arg list npoints: Numerical values of the number of points in each direction.
@@ -189,9 +230,16 @@ class Initialise_Katzer(GridBasedInitialisation):
     :arg int n_coeffs: Desired number of coefficients for the polynomial fit.
     :arg float Re: Reynolds number.
     :arg float xMach: Free-stream Mach number"""
-    def __new__(cls, bl_directions, n_coeffs, Re, xMach, Tinf, coordinate_evaluations=None):
-        ret = super(Initialise_Katzer, cls).__new__(cls)
-        print("Polynomial boundary-layer initialiastion called with Re = %f, Mach = %f, T_inf = %f." % (Re, xMach, Tinf))
+    def __new__(cls, bl_directions, n_coeffs, Re, xMach, Tinf, Twall=True, coordinate_evaluations=None):
+        ret = super(Initialise_Flatplate, cls).__new__(cls)
+
+        if ret.find_constant_values([Twall])[0] == True:
+            ret.find_constant_values([Twall])[0] == 'adiabtic'
+            twallprint = 'adiabtic'
+            print("Polynomial boundary-layer initialiastion called with Re = %f, Mach = %f, T_inf = %f. T_wall = %s. " % (Re, xMach, Tinf, twallprint))
+        else:
+            print("Polynomial boundary-layer initialiastion called with Re = %f, Mach = %f, T_inf = %f. T_wall = %f. " % (Re, xMach, Tinf, Twall))
+        
         ret.coordinates = [x[1] for x in bl_directions]
         ret.bl_directions = bl_directions
         ret.n_coeffs = n_coeffs
@@ -200,6 +248,8 @@ class Initialise_Katzer(GridBasedInitialisation):
         ret.Tinf = ret.find_constant_values([Tinf])[0]
         ret.equations = []
         ret.xMach = ret.find_constant_values([xMach])[0]
+        ret.Twall = ret.find_constant_values([Twall])[0]
+        ret.Adiabatic_condition = ret.find_constant_values([Twall])[0]
         return ret
 
     def find_constant_values(self, input):
@@ -233,26 +283,32 @@ class Initialise_Katzer(GridBasedInitialisation):
         # Check if user has passed equations to evaluate coordinates, and add them to the kernel
         if self.coordinate_evaluations:
             self.equations += self.coordinate_evaluations
+
+        # addition for initialisation around bumps
+        x1b0 = [OpenSBLIEq(GridVariable('x1b0'), self.coordinate_evaluations[1].rhs.xreplace({self.block.grid_indexes[1] : 0.0}))]
+        self.equations += x1b0
+
         self.initial = self.generate_initial_condition()
         # Add polynomial equations to initialise the solution
         self.equations += self.eqns
+
         # Convert inputs to DataSets
         self.equations = block.dataobjects_to_datasets_on_block(self.equations)
         # Ensure coordinate arrays are also restarted when required
         self.check_coordinate_evaluation(block)
         # Create the Katzer kernel
         from opensbli.core.kernel import Kernel
-        katzer_kernel = Kernel(block, computation_name="Similiarity solution laminar boundary-layer initialisation%d" % self.order)
-        katzer_kernel.set_grid_range(block)
+        flat_kernel = Kernel(block, computation_name="Similiarity solution laminar boundary-layer initialisation%d" % self.order)
+        flat_kernel.set_grid_range(block)
         # Set halo range
         from opensbli.schemes.spatial.scheme import CentralHalos_defdec
         for d in range(block.ndim):
             # Initialize all five halos
-            katzer_kernel.set_halo_range(d, 0, CentralHalos_defdec())
-            katzer_kernel.set_halo_range(d, 1, CentralHalos_defdec())
-        katzer_kernel.add_equation(self.equations)
-        katzer_kernel.update_block_datasets(block)
-        self.Kernels = [katzer_kernel]
+            flat_kernel.set_halo_range(d, 0, CentralHalos_defdec())
+            flat_kernel.set_halo_range(d, 1, CentralHalos_defdec())
+        flat_kernel.add_equation(self.equations)
+        flat_kernel.update_block_datasets(block)
+        self.Kernels = [flat_kernel]
         return
 
     def generate_initial_condition(self):
@@ -262,9 +318,9 @@ class Initialise_Katzer(GridBasedInitialisation):
         # Tolerance for finding the edge of the boundary layer.
         tolerance = 1e-10
         bl_directions = [x[0] for x in self.bl_directions]
-        print(bl_directions)
+        # print(bl_directions)
 
-        if sum(bl_directions) == 1:  # 2D Katzer and 3D spanwise periodic Katzer, boundary layer in one direction
+        if sum(bl_directions) == 1:  # 2D Flatplate and 3D spanwise periodic Flatplate, boundary layer in one direction
             # Create a large array of coordinates for this direction to interpolate the profile onto
             dire = [i for i, x in enumerate(self.bl_directions) if x[0]][0]
             poly_coordinates = self.uniform_1d_coordinate()
@@ -276,6 +332,7 @@ class Initialise_Katzer(GridBasedInitialisation):
             # Solve continuity equation to obtain rhov
             rhov_new = self.solve_continuity(poly_coordinates, u_new, rho_new)
             edge = self.find_edge_of_bl(u_new, tolerance)
+
             # Obtain polynomial fit coefficients
             rhou_coeffs = self.fit_polynomial(poly_coordinates, rhou_new, edge, n_coeffs)
             rhov_coeffs = self.fit_polynomial(poly_coordinates, rhov_new, edge, n_coeffs)
@@ -336,9 +393,13 @@ class Initialise_Katzer(GridBasedInitialisation):
         :arg int edge: Grid index for the edge of the boundary-layer.
         returns: Eq: eqn: OpenSBLI equation to add to the initialisation kernel."""
         bl_edge_coordinate = poly_coordinates[edge]
+        
         powers = [i for i in range(np.size(coefficients))][::-1]
-        eqn = sum([coeff*self.coordinates[direction]**power for (coeff, power) in zip(coefficients, powers)])  # TODO set to exactl 1.0 if required
-        eqn = OpenSBLIEq(GridVariable('%s' % name), Piecewise((eqn, self.coordinates[direction] < bl_edge_coordinate), (variable[edge], True)))
+        eqn = sum([coeff*(self.coordinates[direction] - GridVariable('x1b0'))**power for (coeff, power) in zip(coefficients, powers)])  # TODO set to exactl 1.0 if required
+
+        # -----------------------------------------------------------------------------------------
+        # here: potentiall addition of y+y0
+        eqn = OpenSBLIEq(GridVariable('%s' % name), Piecewise((eqn, self.coordinates[direction] - GridVariable('x1b0') < bl_edge_coordinate), (variable[edge], True)))
         return eqn
 
     def form_mixed_equation(self, profiles, names, coefficients, directions, edges, normal_profiles, normal_coeffs, poly_coordinates):
@@ -405,6 +466,7 @@ class Initialise_Katzer(GridBasedInitialisation):
         rhou0_eqn = self.form_equation(data[0], 'rhou0', coeffs[0], direction, edge, poly_coordinates)
         rhou1_eqn = self.form_equation(data[1], 'rhou1', coeffs[1], direction, edge, poly_coordinates)
         T_eqn = self.form_equation(data[2], 'T', coeffs[2], direction, edge, poly_coordinates)
+
         # Set conservative values
         rho, rhou0, rhou1, T = GridVariable('rho'), GridVariable('rhou0'), GridVariable('rhou1'), GridVariable('T')
         rho_eqn = OpenSBLIEq(rho, 1.0/T)
@@ -492,6 +554,8 @@ class Initialise_Katzer(GridBasedInitialisation):
         delta, scale, re = 0.001, self.scale_factor, self.Re
         rex0 = 0.5*(re/scale)**2
         x0 = 0.5*re/scale**2
+
+        print('starting location of simulation x', x0)
         # print "Domain inlet is when the boundary-layer has developed for a length of x0 = %.10f" % x0
         drudx, rhov = np.zeros_like(y), np.zeros_like(y)
         # Local Reynolds number scaling to obtain a v profile
@@ -515,9 +579,18 @@ class Initialise_Katzer(GridBasedInitialisation):
 
     def load_similarity(self):
         """ Solves the compressible boundary-layer equations via similarity solution."""
-        Re, xMach, Tinf = self.Re, self.xMach, self.Tinf
+        Re, xMach, Tinf, Twall = self.Re, self.xMach, self.Tinf, self.Twall
+        Adiabatic_condition = self.Adiabatic_condition
         Pr, gama = 0.72, 1.4  # Prandtl number, ratio of specific heats
-        bl = Boundary_layer_profile(xMach, Pr, gama, -1, Re, Tinf)  # -1 for Tw sets an adiabatic wall
+        # bl = Boundary_layer_profile(xMach, Pr, gama, -1, Re, Tinf)  # -1 for Tw sets an adiabatic wall
+        # bl = Boundary_layer_profile(xMach, Pr, gama, Twall, Re, Tinf)  # -1 for Tw sets an adiabatic wall
+
+        if Adiabatic_condition == True:
+            bl = Boundary_layer_profile(xMach, Pr, gama, -1, Re, Tinf)  # -1 for Tw sets an adiabatic wall
+        else:
+            bl = Boundary_layer_profile(xMach, Pr, gama, Twall, Re, Tinf)  # -1 for Tw sets an adiabatic wall
+
+        # bl = Boundary_layer_profile(xMach, Pr, gama, 2.0, Re, Tinf)
         y, u, T, rho, n = bl.y, bl.u, bl.T, 1.0/bl.T, np.size(bl.y)
         self.Twall, self.scale_factor = bl.Twall, bl.scale_factor  # Wall temperature and scale factor from the similarity solution
         self.dudy = bl.dudy  # du/dy at the wall

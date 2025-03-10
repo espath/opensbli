@@ -35,13 +35,16 @@ class SimpleAverage(Averaging):
         print("Simple averaging is being used for the characteristic system.")
         return
 
-    def average(self, functions, direction, name_suffix, block):
+    def average(self, functions, direction, name_suffix, block, locations=None):
         """Performs a simple average.
 
         :arg functions: List of function (Symbols) to apply averaging on.
         :arg locations: Relative index used for averaging (e.g. [0,1] for i and i+1)
         :arg direction: Axis of the dataset on which the location should be applied.
         :arg name_suffix: Name to be appended to the functions. """
+        # TVD filter requires averages at different locations
+        if locations is not None:
+            self.locations = locations
         avg_equations = []
         for f in functions:
             if isinstance(f, EinsteinTerm):
@@ -67,9 +70,11 @@ class RoeAverage(Averaging):
         self.physics = physics
         return
 
-    def average(self, functions, direction, name_suffix, block):
+    def average(self, functions, direction, name_suffix, block, locations=None):
         self.direction = direction
         evaluations = []
+        if locations is not None:
+            self.locations = locations
         # Averaged density rho_hat = sqrt(rho_L*rho_R)
         if self.physics:
             physics = self.physics
@@ -93,7 +98,12 @@ class RoeAverage(Averaging):
 
         # Calcualte enthalpy h = rhoE + P/rho
         P_L, P_R = self.get_locations('p', direction, block)
-        rhoE_L, rhoE_R = self.get_locations('rhoE', direction, block)
+        if block.conservative:
+            rhoE_L, rhoE_R = self.get_locations('rhoE', direction, block)
+        else:
+            E_L, E_R = self.get_locations('Et', direction, block)
+            rhoE_L, rhoE_R = rho_L*E_L, rho_R*E_R
+        # Enthalpy
         H_L = (rhoE_L + P_L)/rho_L
         H_R = (rhoE_R + P_R)/rho_R
         roe_enthalpy = (sqrt(rho_L)*H_L+sqrt(rho_R)*H_R)*grid_vars[1]

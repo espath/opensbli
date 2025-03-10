@@ -4,8 +4,7 @@
    @details base classes for different type of equations used in opensbli
 """
 
-from opensbli.core.opensbliobjects import DataSet, ConstantObject, DataSetBase, DataObject
-from opensbli.core.opensblifunctions import TemporalDerivative
+from opensbli.core.opensbliobjects import DataSet, ConstantObject, DataSetBase, DataObject, GroupedPiecewise, ReductionVariable, ReductionSum, ReductionMax, ReductionMin
 from sympy import flatten, preorder_traversal
 from sympy import Equality, Function, pprint, srepr
 
@@ -132,9 +131,12 @@ class Discretisation(object):
         if isinstance(equation, list):
             local = []
             for no, eq in enumerate(equation):
-                eq = OpenSBLIEquation(eq.lhs, eq.rhs)
-                eq.set_vector(no)
-                local += [eq]
+                if isinstance(eq, GroupedPiecewise):
+                    local += [eq]
+                else:
+                    eq = OpenSBLIEquation(eq.lhs, eq.rhs)
+                    eq.set_vector(no)
+                    local += [eq]
             self.equations += [local]
         else:
             equation = OpenSBLIEquation(equation.lhs, equation.rhs)
@@ -164,6 +166,24 @@ class OpenSBLIEquation(Equality):
         replacements = {}
         for d in self.atoms(DataObject):
             replacements[d] = block.location_dataset(d)
+        args = [a.subs(replacements) for a in self.args]
+        return type(self)(*args)
+
+    def convert_reduction_vars(self, block):
+        """ Make ReductionVariables block-specific quantities to avoid name conflicts when nblocks > 1."""
+        replacements = {}
+        # Check for reduction variables
+        for d in self.atoms(ReductionVariable):
+            # Give the reduction variable a block-specific name
+            name = d.name + '_B%d' % block.blocknumber
+            if d.reduction_type == 'OPS_INC':
+                replacements[d] = ReductionSum(name)
+            elif d.reduction_type == 'OPS_MAX':
+                replacements[d] = ReductionMax(name)
+            elif d.reduction_type == 'OPS_MIN':
+                replacements[d] = ReductionMin(name)
+            else:
+                raise ValueError("Unknown reduction variable type detected: {}".format(name))
         args = [a.subs(replacements) for a in self.args]
         return type(self)(*args)
 
@@ -209,6 +229,14 @@ class Solution(object):
         # Kernels for boundary
         self.boundary_kernels = []
         return
+
+
+    def get_spatial_schemes(self, schemes):
+        spatialschemes = []
+        for key, value in sorted(schemes.items(), key=lambda x: x[1].algorithm_order):
+            if value.schemetype == "Spatial":
+                spatialschemes += [key]
+        return spatialschemes
 
 
 class SimulationEquations(Discretisation, Solution):
@@ -280,12 +308,10 @@ class SimulationEquations(Discretisation, Solution):
         # Kernel to make the residuals zero
         # cls.zero_residuals_kernel(block)
 
-        spatialschemes = []
         # Get the schemes on the block
         schemes = block.discretisation_schemes
-        for sc in schemes:
-            if schemes[sc].schemetype == "Spatial":
-                spatialschemes += [sc]
+        # Force WENO/TENO schemes to be evaluated first
+        spatialschemes = cls.get_spatial_schemes(schemes)
         # Perform spatial Discretisation
         cls.constituent_evaluations = {}
         crs = block.get_constituent_equation_class
@@ -318,7 +344,18 @@ class SimulationEquations(Discretisation, Solution):
             if dset in cr_dictionary.keys():
                 for kernel in cr_dictionary[dset].kernels:
                     cls.constituent_relations_kernels[kernel.equations[-1].lhs] = kernel
+
+        # Merge the CRs into one large kernel?
+        CR_merge = False
+        if CR_merge:
+            cls.merge_CR(block)
         cls.process_kernels(block)
+        return
+
+
+    def merge_CR(cls, block):
+        """ Merges the CRs to evalute in one kernel instead."""
+
         return
 
     def process_kernels(cls, block):
@@ -422,6 +459,7 @@ class SimulationEquations(Discretisation, Solution):
 
     @property
     def time_advance_arrays(cls):
+        from opensbli.core.opensblifunctions import TemporalDerivative
         TD_fns = []
         for c in cls.equations:
             if isinstance(c, list):
@@ -471,13 +509,9 @@ class ConstituentRelations(Discretisation, Solution):
         (Solution, cls).__init__(cls)
         # Create the residual array for the equations
         cls.create_residual_arrays()
-
-        spatialschemes = []
         # Get the schemes on the block
         schemes = block.discretisation_schemes
-        for sc in schemes:
-            if schemes[sc].schemetype == "Spatial":
-                spatialschemes += [sc]
+        spatialschemes = cls.get_spatial_schemes(schemes)
         # Perform spatial Discretisation if any in constituent relations evaluation
         cls.constituent_evaluations = {}
         equations = cls.equations
@@ -521,6 +555,7 @@ class NonSimulationEquations(Discretisation):
 
     @property
     def time_advance_arrays(cls):
+        from opensbli.core.opensblifunctions import TemporalDerivative
         TD_fns = []
         for c in cls.equations:
             if isinstance(c, list):

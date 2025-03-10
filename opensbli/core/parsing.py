@@ -4,16 +4,17 @@ from sympy import pprint, flatten, Function, Derivative, Equality, Symbol, Ratio
 from sympy.core.function import AppliedUndef
 from opensbli.core.opensbliobjects import ConstantObject, MetricObject, CoordinateObject, DataSet, DataObject, EinsteinTerm
 from opensbli.core.opensblifunctions import WenoDerivative, CentralDerivative, TenoDerivative, MetricDerivative, TemporalDerivative,\
-    EinsteinStructure, expand_free_indices
+    EinsteinStructure, expand_free_indices, TVDDerivative
 from sympy.parsing.sympy_parser import parse_expr, standard_transformations
 from opensbli.equation_types.opensbliequations import OpenSBLIEq
 
-from sympy.parsing.sympy_tokenize import NAME, OP
+# from sympy.parsing.sympy_tokenize import NAME, OP
+from tokenize import NAME, OP
 
 LOG = logging.getLogger(__name__)
 LOCAL_FUNCTIONS = []
 
-classdict = {Symbol('Central'): CentralDerivative, Symbol('Temporal'): TemporalDerivative, Symbol('Weno'): WenoDerivative, Symbol('Metric'): MetricDerivative, Symbol('Teno'): TenoDerivative}
+classdict = {Symbol('Central'): CentralDerivative, Symbol('Temporal'): TemporalDerivative, Symbol('Weno'): WenoDerivative, Symbol('Metric'): MetricDerivative, Symbol('Teno'): TenoDerivative,  Symbol('TVD'): TVDDerivative}
 
 
 class ParsingSchemes(object):

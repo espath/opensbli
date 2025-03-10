@@ -6,8 +6,9 @@
 
 from opensbli.equation_types.opensbliequations import NonSimulationEquations
 from opensbli.core.kernel import Kernel
-from opensbli.core.opensbliobjects import GroupedPiecewise
-from sympy import Equality, flatten
+from opensbli.core.kernel import ConstantsToDeclare as CTD
+from opensbli.core.opensbliobjects import GroupedPiecewise, ConstantObject, DataObject, DataSet
+from sympy import Equality, flatten, pprint
 from opensbli.code_generation.algorithm.common import BeforeSimulationStarts
 from opensbli.schemes.spatial.scheme import CentralHalos_defdec
 
@@ -21,8 +22,13 @@ class GridBasedInitialisation(NonSimulationEquations):
             ret.order = 0
         ret.equations = []
         ret.kwargs = kwargs
-        # A control parameter is needed for where to put these equations in the algorithm
-        ret.algorithm_place = [BeforeSimulationStarts()]
+        # Variable to control restarting
+        cls.restart = ConstantObject('restart', integer=True)
+        cls.restart.value = 0
+        # cls.restart.datatype = Int()
+        CTD.add_constant(cls.restart)
+        condition = Equality(cls.restart, 0)
+        ret.algorithm_place = [BeforeSimulationStarts(start_condition=condition)]
         return ret
 
     def __hash__(self):
@@ -44,6 +50,9 @@ class GridBasedInitialisation(NonSimulationEquations):
         return evaluated
 
     def spatial_discretisation(cls, block):
+        """ Compute the equations for the initial condition, evaluated only once at the start of a simulation if restart == 0."""
+        # Check for coordinate dependencies
+        cls.check_coordinate_evaluation(block)
         kernel = Kernel(block, computation_name="Grid_based_initialisation%d" % cls.order)
         kernel.set_grid_range(block)
         schemes = block.discretisation_schemes
@@ -54,6 +63,16 @@ class GridBasedInitialisation(NonSimulationEquations):
         kernel.add_equation(cls.equations)
         kernel.update_block_datasets(block)
         cls.Kernels = [kernel]
+        return
+
+    def check_coordinate_evaluation(cls, block):
+        """ If the grid was created inside the initialisation kernel (not read in from a separate grid file), 
+        the array declarations must be changed to also restart the coordinate arrays."""
+        coordinate_symbol = "x"
+        coordinate_names = [coordinate_symbol + '%d' % i + '_B%d' % block.blocknumber for i in range(block.ndim)]
+        LHS = [x.lhs for x in flatten(cls.equations) if isinstance(x.lhs, DataObject)]
+        LHS += [x.lhs for x in flatten(cls.equations) if isinstance(x.lhs, DataSet)]
+        block.coordinate_arrays_to_restart = [x for x in LHS if str(x) in coordinate_names]
         return
 
     def apply_boundary_conditions(cls, block):

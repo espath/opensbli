@@ -1,11 +1,13 @@
 from sympy import Symbol, flatten
-from sympy.core.compatibility import is_sequence
+# from sympy.core.compatibility import 
+from sympy.utilities.iterables import is_sequence
 from sympy.tensor import Idx, IndexedBase, Indexed
 from sympy import pprint
 from sympy.tensor.indexed import IndexException
 from sympy.core.cache import cacheit
 from opensbli.core.datatypes import SimulationDataType
 from sympy.core import Tuple
+from opensbli.core.datatypes import Int, Half, FloatC, Double
 
 
 _projectname = "opensbli"
@@ -125,6 +127,92 @@ class Constant(object):
     pass
 
 
+class ReductionVariable(EinsteinTerm, Constant):
+    """Base class for ReductionVariables, to perform OPS reduction operations.
+
+    :param str label: name of the constant object
+    :returns: declared constant
+    :rtype: ReductionVariable """
+    is_commutative = True
+
+    def __new__(cls, label, **kwargs):
+        ret = super(ReductionVariable, cls).__new__(cls, label, **kwargs)
+        ret.is_constant = True
+        ret.is_input = True
+        ret._datatype = SimulationDataType()
+        ret.value = '%s_out' % str(label)
+        return ret
+
+    def __hash__(self):
+        h = hash(self._hashable_content())
+        self._mhash = h
+        return h
+
+    def _hashable_content(self):
+        return str(self.name)
+
+    @property
+    def datatype(self):
+        return self._datatype
+
+    @datatype.setter
+    def datatype(self, dtype):
+        """Set the type of the ReductionVariable."""
+        self._datatype = dtype
+
+
+class ReductionSum(ReductionVariable):
+    is_commutative = True
+
+    def __new__(cls, label, **kwargs):
+        ret = super(ReductionSum, cls).__new__(cls, label, **kwargs)
+        ret._reduction_type = 'OPS_INC'
+        return ret
+
+    @property
+    def reduction_type(self):
+        return self._reduction_type
+
+    @reduction_type.setter
+    def reduction_type(self, rtype):
+        """Set the type of the ReductionVariable."""
+        self._reduction_type = rtype
+
+
+class ReductionMax(ReductionVariable):
+    is_commutative = True
+
+    def __new__(cls, label, **kwargs):
+        ret = super(ReductionMax, cls).__new__(cls, label, **kwargs)
+        ret._reduction_type = 'OPS_MAX'
+        return ret
+
+    @property
+    def reduction_type(self):
+        return self._reduction_type
+
+    @reduction_type.setter
+    def reduction_type(self, rtype):
+        """Set the type of the ReductionVariable."""
+        self._reduction_type = rtype
+
+class ReductionMin(ReductionVariable):
+    is_commutative = True
+
+    def __new__(cls, label, **kwargs):
+        ret = super(ReductionMin, cls).__new__(cls, label, **kwargs)
+        ret._reduction_type = 'OPS_MIN'
+        return ret
+
+    @property
+    def reduction_type(self):
+        return self._reduction_type
+
+    @reduction_type.setter
+    def reduction_type(self, rtype):
+        """Set the data type of the ReductionVariable."""
+        self._reduction_type = rtype
+
 class ConstantObject(EinsteinTerm, Constant):
     """A constant object which can have Einstein indices to be expanded. This is used to
     differentiate between different Einstein terms, which are used in differentiation.
@@ -136,12 +224,14 @@ class ConstantObject(EinsteinTerm, Constant):
     :rtype: ConstantObject """
     is_commutative = True
 
-    def __new__(cls, label, **kwargs):
+    def __new__(cls, label, rational=False, restart=False, **kwargs):
         ret = super(ConstantObject, cls).__new__(cls, label, **kwargs)
         ret.is_constant = True
         ret.is_input = True
         ret._datatype = SimulationDataType()
         ret._value = "Input"
+        ret.rational = rational
+        ret.restart = restart # Restart the constant from HDF5?
         return ret
 
     def __hash__(self):
@@ -189,7 +279,7 @@ class ConstantIndexed(Indexed, Constant):
 
     :param str label: Name of the ConstantIndexed.
     :param list indices: Indices of the ConstantIndexed. (See: Sympy Indexed class)."""
-    def __new__(cls, label, indices, **kwargs):
+    def __new__(cls, label, indices, restart=False, **kwargs):
         base = IndexedBase(label)
         if isinstance(indices, list):
             for i in indices:
@@ -203,8 +293,10 @@ class ConstantIndexed(Indexed, Constant):
         ret.is_constant = True
         ret.inline_array = True
         ret.is_input = True
+        ret.rational = False # not converted to 1/rc notation
         ret._datatype = SimulationDataType()
         ret._value = ["Input" for i in range(ret.shape[0])]
+        ret.restart = restart # Restart the constant from HDF5?
         return ret
 
     @property
@@ -349,6 +441,7 @@ class DataSetBase(IndexedBase):
         if shape is None:
             raise ValueError("Dataset base requires shape of the block")
         ret = super(DataSetBase, cls).__new__(cls, sym, shape, **kw_args)
+        ret._datatype = SimulationDataType
         ret.blocknumber = blocknumber
         ret._args = tuple(list(ret._args) + [Idx(blocknumber)])
         return ret
@@ -394,6 +487,16 @@ class DataSetBase(IndexedBase):
         This is provided so that if in future staggered grid arrangement can be implemented."""
         return [0 for i in range(len(self.shape))]
 
+    @property
+    def datatype(self):
+        """Numeric data type of the dataset array.
+
+        :returns: Numerical datatype (see :class:`.SimulationDataType`)"""
+        return self._datatype
+
+    @datatype.setter
+    def datatype(self, dtype):
+        self._datatype = dtype
 
 class DataSet(Indexed):
     """ It is the Data set of a DatasetBase which is defined on a block.
@@ -416,6 +519,7 @@ class DataSet(Indexed):
             raise ValueError("Declare DatasetBase and instantiate a dataset")
         indices = base.check_index(indices)
         ret = Indexed.__new__(cls, base, *indices)
+        ret.cast_precision = False
         return ret
 
     def _sympystr(self, p):
@@ -436,6 +540,17 @@ class DataSet(Indexed):
         :rtype: list """
         return [i for i in self.indices if not isinstance(i, Idx)]
 
+    @property
+    def datatype(self):
+        """Numeric data type of the dataset array.
+
+        :returns: Numerical datatype (see :class:`.SimulationDataType`)"""
+        return self._datatype
+
+    @datatype.setter
+    def datatype(self, dtype):
+        self._datatype = dtype
+
 
 class GridIndex(Indexed):
     """ An Indexed object to get the local grid point. """
@@ -450,44 +565,6 @@ class GridIndex(Indexed):
             raise ValueError("GridIndex base should be GridIndexedBase object")
         ret = Indexed.__new__(cls, base, *indices)
         return ret
-
-
-class GridIndexedBase(IndexedBase):
-    """ TODO is it used?
-    Base object to locate the global index of the grid point NOT USED ANY MORE WARNING
-    """
-    is_commutative = True
-    is_Symbol = True
-    is_symbol = True
-    is_Atom = True
-
-    def __new__(cls, label, ndim, **kw_args):
-        sym = label
-        pprint(sym)
-        print(type(sym))
-        ret = super(GridIndexedBase, cls).__new__(cls, sym, (1), **kw_args)  # Shape would be of size ndim
-        pprint(ret.shape)
-        return ret
-
-    def __hash__(self):
-        h = hash(self._hashable_content())
-        self._mhash = h
-        return h
-
-    def _hashable_content(self):
-        return str(self.label)
-
-    def __getitem__(cls, indices, **kw_args):
-        if isinstance(indices, int):
-            indices = [indices]
-        if len(indices) != cls.shape:
-            raise IndexException("Rank mismatch.")
-        return GridIndex(cls, *indices)
-
-    def _sympystr(self, p):
-        """ For clarity the block number is printed"""
-        return "%s" % (str(self.label))
-
 
 class Grididx(Indexed):
     """ A coordinate object which can have Einstein indices to be expanded, this is used to
@@ -518,11 +595,16 @@ class Globalvariable(EinsteinTerm, GlobalValue):
 
     is_commutative = True
 
-    def __new__(cls, label, **kwargs):
+    def __new__(cls, label, restart=False, **kwargs):
         ret = super(Globalvariable, cls).__new__(cls, label, **kwargs)
-        ret._datatype = SimulationDataType()
+        if 'integer' in kwargs:
+            if kwargs['integer']:
+                ret._datatype = Int()
+            else:
+                ret._datatype = SimulationDataType()
         ret.is_input = True
         ret._value = "Input"
+        ret.restart = restart
         return ret
 
     @property
@@ -650,6 +732,195 @@ class GroupedPiecewise(Piecewise):
     def rhs_datasetbases(self):
         dsets = set()
         for e, c in self.args:
+            if is_sequence(e):
+                for eq1 in e:
+                    if is_sequence(eq1):
+                        raise NotImplementedError("")
+                    dsets = dsets.union(eq1.rhs_datasetbases)
+            else:
+                dsets = dsets.union(e.rhs_datasetbases)
+            dsets = dsets.union(c.atoms(DataSetBase))
+        return dsets
+
+    @property
+    def expr_rhs(cls):
+        return flatten([pairs.rhs for pairs in cls.pairs])
+
+    @property
+    def expr_lhs(cls):
+        return flatten([pairs.lhs for pairs in cls.pairs])
+
+    @property
+    def extract_all_equations(cls):
+        cls.all_equations = flatten([pair.expressions for pair in cls.pairs])
+
+    @property
+    def extract_all_conditions(cls):
+        cls.all_conditions = flatten([pair.cond for pair in cls.pairs])
+
+
+class WhileLoop(Piecewise):
+    nargs = None
+    is_Piecewise = True
+
+    def __new__(cls, *args, **options):
+        return Piecewise.__new__(cls, *args, **options)
+
+    def add_pair(cls, expr_pair):
+        cls.pairs.append(expr_pair)
+        cls.extract_all_equations
+        cls.extract_all_conditions
+        # assert isinstance(Boolean, expr_pair[1])
+        cls.grouped_conditions += [expr_pair[1]]
+        cls.grouped_equations += [expr_pair[0]]  # add input checking here
+        return
+
+    def convert_to_datasets(self, block):
+        replacements = {}
+        for d in self.atoms(DataObject):
+            replacements[d] = block.location_dataset(d)
+        return self.subs(replacements)
+
+    def _eval_subs(self, old, new):
+        args = list(self.args)
+        for i, (e, c) in enumerate(args):
+            c = c._subs(old, new)
+            if is_sequence(e):
+                for no, eq1 in enumerate(e):
+                    if is_sequence(eq1):
+                        raise NotImplementedError("")
+                    e[no] = eq1._subs(old, new)
+            else:
+                e = e._subs(old, new)
+            args[i] = (e, c)
+        return self.func(*args)
+
+    @property
+    def lhs_datasetbases(self):
+        """ These are the datsets to be written out, so only expressions are considered and condition is omitted"""
+        dsets = set()
+        for e, c in self.args[0:1]: # Equations should all be in the first pair
+            if is_sequence(e):
+                for eq1 in e:
+                    if is_sequence(eq1):
+                        raise NotImplementedError("")
+                    dsets = dsets.union(eq1.lhs_datasetbases)
+            else:
+                dsets = dsets.union(e.lhs_datasetbases)
+        return dsets
+
+    @property
+    def lhs_datasets_full(self):
+        """ These are the datsets to be written out, so only expressions are considered and condition is omitted"""
+        dsets = set()
+        for e, c in self.args:
+            if is_sequence(e):
+                for eq1 in e:
+                    if is_sequence(eq1):
+                        raise NotImplementedError("")
+                    dsets = dsets.union(eq1.atoms(DataSet))
+            else:
+                dsets = dsets.union(e.atoms(DataSet))
+        return dsets
+
+    @property
+    def rhs_datasetbases(self):
+        dsets = set()
+        for e, c in self.args[0:1]: # Equations should all be in the first pair
+            if is_sequence(e):
+                for eq1 in e:
+                    if is_sequence(eq1):
+                        raise NotImplementedError("")
+                    dsets = dsets.union(eq1.rhs_datasetbases)
+            else:
+                dsets = dsets.union(e.rhs_datasetbases)
+            dsets = dsets.union(c.atoms(DataSetBase))
+        return dsets
+
+    @property
+    def expr_rhs(cls):
+        return flatten([pairs.rhs for pairs in cls.pairs])
+
+    @property
+    def expr_lhs(cls):
+        return flatten([pairs.lhs for pairs in cls.pairs])
+
+    @property
+    def extract_all_equations(cls):
+        cls.all_equations = flatten([pair.expressions for pair in cls.pairs])
+
+    @property
+    def extract_all_conditions(cls):
+        cls.all_conditions = flatten([pair.cond for pair in cls.pairs])
+
+class ForLoop(Piecewise):
+    nargs = None
+    is_Piecewise = True
+
+    def __new__(cls, *args, **options):
+        return Piecewise.__new__(cls, *args, **options)
+
+    def add_pair(cls, expr_pair):
+        cls.pairs.append(expr_pair)
+        cls.extract_all_equations
+        cls.extract_all_conditions
+        # assert isinstance(Boolean, expr_pair[1])
+        cls.grouped_conditions += [expr_pair[1]]
+        cls.grouped_equations += [expr_pair[0]]  # add input checking here
+        return
+
+    def convert_to_datasets(self, block):
+        replacements = {}
+        for d in self.atoms(DataObject):
+            replacements[d] = block.location_dataset(d)
+        return self.subs(replacements)
+
+    def _eval_subs(self, old, new):
+        args = list(self.args)
+        for i, (e, c) in enumerate(args):
+            c = c._subs(old, new)
+            if is_sequence(e):
+                for no, eq1 in enumerate(e):
+                    if is_sequence(eq1):
+                        raise NotImplementedError("")
+                    e[no] = eq1._subs(old, new)
+            else:
+                e = e._subs(old, new)
+            args[i] = (e, c)
+        return self.func(*args)
+
+    @property
+    def lhs_datasetbases(self):
+        """ These are the datsets to be written out, so only expressions are considered and condition is omitted"""
+        dsets = set()
+        for e, c in self.args[0:1]: # Equations should all be in the first pair
+            if is_sequence(e):
+                for eq1 in e:
+                    if is_sequence(eq1):
+                        raise NotImplementedError("")
+                    dsets = dsets.union(eq1.lhs_datasetbases)
+            else:
+                dsets = dsets.union(e.lhs_datasetbases)
+        return dsets
+
+    @property
+    def lhs_datasets_full(self):
+        """ These are the datsets to be written out, so only expressions are considered and condition is omitted"""
+        dsets = set()
+        for e, c in self.args:
+            if is_sequence(e):
+                for eq1 in e:
+                    if is_sequence(eq1):
+                        raise NotImplementedError("")
+                    dsets = dsets.union(eq1.atoms(DataSet))
+            else:
+                dsets = dsets.union(e.atoms(DataSet))
+        return dsets
+
+    @property
+    def rhs_datasetbases(self):
+        dsets = set()
+        for e, c in self.args[0:1]: # Equations should all be in the first pair
             if is_sequence(e):
                 for eq1 in e:
                     if is_sequence(eq1):

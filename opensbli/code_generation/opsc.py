@@ -4,16 +4,21 @@
    @details Implements the tree-based structure with the attribute (components) controls the
    depth of a node."""
 
-from sympy.core.compatibility import is_sequence
+# from sympy.core.compatibility import is_sequence
+from sympy.printing.precedence import precedence
+from sympy.utilities.iterables import is_sequence
 from sympy.printing.ccode import C99CodePrinter
+# from sympy.printing.c import C99CodePrinter
 from sympy.core.relational import Equality
-from opensbli.core.opensbliobjects import ConstantObject, ConstantIndexed, Constant, DataSetBase, GroupedPiecewise
-from sympy import Symbol, flatten
+from opensbli.core.opensbliobjects import ConstantObject, ConstantIndexed, Constant, DataSetBase, GroupedPiecewise, ReductionVariable, DataObject, DataSet, WhileLoop, ForLoop
+from sympy import Symbol, flatten, Rational, nsimplify
 from opensbli.core.grid import GridVariable
 from opensbli.core.datatypes import SimulationDataType
-from sympy import Pow, Idx, pprint, count_ops
+from opensbli.core.datatypes import FloatC, Double
+from sympy import Pow, Idx, pprint, count_ops, Piecewise
 import os
 import logging
+from collections import OrderedDict
 LOG = logging.getLogger(__name__)
 BUILD_DIR = os.getcwd()
 
@@ -24,7 +29,7 @@ class RationalCounter():
     def __init__(self):
         self.name = 'rc%d'
         self.rational_counter = 0
-        self.existing = {}
+        self.existing = OrderedDict()
 
     @property
     def increase_rational_counter(self):
@@ -33,9 +38,10 @@ class RationalCounter():
 
     def get_next_rational_constant(self, numerical_value):
         from opensbli.core.kernel import ConstantsToDeclare
-        name = self.name % self.rational_counter
+        # name = self.name % self.rational_counter
+        name = self.name
         self.increase_rational_counter
-        ret = ConstantObject(name)
+        ret = ConstantObject(name, rational=True) # Don't write rational constants to the HDF files
         ret.value = numerical_value
         self.existing[numerical_value] = ret
         ConstantsToDeclare.add_constant(ret)
@@ -49,16 +55,32 @@ class OPSCCodePrinter(C99CodePrinter):
 
     """ Prints OPSC code. """
     dataset_accs_dictionary = {}
-    settings_opsc = {'rational': False, 'kernel': False}
+    settings_opsc = {'rational': True, 'kernel': False, 'order': 'none'}
 
     def __init__(self, settings={}):
         """ Initialise the code printer. """
         self.settings_opsc = settings
-        if 'rational' in settings.keys():
-            self.settings_opsc = settings
+        # Mixed precision settings
+        if 'arrays_to_cast' in settings.keys():
+            if len(settings['arrays_to_cast']) > 0:
+                self.cast_precision = True
+            else:
+                self.cast_precision = False
         else:
-            self.settings_opsc['rational'] = False
-        C99CodePrinter.__init__(self, settings={})
+            self.cast_precision = False
+        C99CodePrinter.__init__(self, settings={'order':'none'})
+
+    def return_args(self, expr):
+        """ Retrieves the arguments of an input expression. Used for modifying the function call with custom code printers."""
+        settings = {'kernel': True}
+        for const in expr.atoms(Idx).union(expr.atoms(ConstantObject)):
+            if hasattr(const, "main_file"):
+                settings = {'kernel': False}
+                break
+        args = map(lambda x: ccode(x, settings), expr.args)
+        args = [x for x in args]
+        result = ','.join(args)
+        return result
 
     def _print_ReductionVariable(self, expr):
         return '*%s' % str(expr)
@@ -67,40 +89,115 @@ class OPSCCodePrinter(C99CodePrinter):
         """ Settings: if rational is True then rational numbers are printed as they are.
         Otherwise optimisations will be performed for rational constants that are evaluated
         at the start of the program to reduce divisions."""
-        if self.settings_opsc.get('rational', True):
-            p, q = int(expr.p), int(expr.q)
-            return '%d.0/%d.0' % (p, q)
+        expr = nsimplify(expr)
+        p, q = int(expr.p), int(expr.q)
+        if isinstance(SimulationDataType.dtype(), FloatC):
+            return '(%d.0f/%d.0f)' % (p, q)
         else:
-            if expr in rc.existing:
-                return self._print(rc.existing[expr])
-            else:
-                return self._print(rc.get_next_rational_constant(expr))
+            return '(%d.0/%d.0)' % (p, q)
 
     def _print_Mod(self, expr):
         """ All modulus functions are expressed as fmod currently and no integer values."""
-        args = map(ccode, expr.args)
-        args = [x for x in args]
-        result = ','.join(args)
-        result = 'fmod(%s)' % result
+        result = 'fmod(%s)' % self.return_args(expr)
         return result
+
+    def _print_Float(self, expr):
+        if isinstance(SimulationDataType.dtype(), FloatC):
+            return str(float(expr)) + 'f'
+        else:
+            return super()._print_Float(expr)
+
+    def _print_sin(self, expr):
+        if isinstance(SimulationDataType.dtype(), FloatC):
+            return 'sinf(%s)' % self.return_args(expr)
+        else:
+            return 'sin(%s)' % self.return_args(expr)
+
+    def _print_cos(self, expr):
+        if isinstance(SimulationDataType.dtype(), FloatC):
+            return 'cosf(%s)' % self.return_args(expr)
+        else:
+            return 'cos(%s)' % self.return_args(expr)
+
+    def _print_tan(self, expr):
+        if isinstance(SimulationDataType.dtype(), FloatC):
+            return 'tanf(%s)' % self.return_args(expr)
+        else:
+            return 'tan(%s)' % self.return_args(expr)
+
+    def _print_sinh(self, expr):
+        if isinstance(SimulationDataType.dtype(), FloatC):
+            return 'sinhf(%s)' % self.return_args(expr)
+        else:
+            return 'sinh(%s)' % self.return_args(expr)
+
+    def _print_cosh(self, expr):
+        if isinstance(SimulationDataType.dtype(), FloatC):
+            return 'coshf(%s)' % self.return_args(expr)
+        else:
+            return 'cosh(%s)' % self.return_args(expr)
+
+    def _print_tanh(self, expr):
+        if isinstance(SimulationDataType.dtype(), FloatC):
+            return 'tanhf(%s)' % self.return_args(expr)
+        else:
+            return 'tanh(%s)' % self.return_args(expr)
 
     def _print_GridVariable(self, expr):
         """Prints the grid variable"""
         return str(expr)
 
+
+    def _print_Abs(self, expr):
+        if isinstance(SimulationDataType.dtype(), FloatC):
+            return 'fabsf(%s)' % self.return_args(expr)
+        else:
+            return 'fabs(%s)' % self.return_args(expr)
+
     def _print_Max(self, expr):
         """MAXIMUM of the arguments, can handle any number of arguments:
         Max(a,b,c,d) is written as max(a, max(max(b,c),d))"""
+        if isinstance(SimulationDataType.dtype(), FloatC):
+            func_call = 'fmaxf(%s, %s)'
+        else:
+            func_call = 'fmax(%s, %s)'
 
         nargs = len(expr.args)
         args_code = [self._print(a) for a in expr.args]
         for i in range(nargs-1):
             # Max of the last 2 arguments in the array
-            string_max = 'fmax(%s, %s)' % (args_code[-2], args_code[-1])
+            template = func_call % (args_code[-2], args_code[-1])
             # Remove the last 2 entries and append the max of the last 2
             del args_code[-2:]
-            args_code.append(string_max)
+            args_code.append(template)
         return str(args_code[0])
+
+    def _print_Min(self, expr):
+        """MINIUM of the arguments, can handle any number of arguments:
+        Min(a,b,c,d) is written as min(a, min(min(b,c),d))"""
+        if isinstance(SimulationDataType.dtype(), FloatC):
+            func_call = 'fminf(%s, %s)'
+        else:
+            func_call = 'fmin(%s, %s)'
+
+        nargs = len(expr.args)
+        args_code = [self._print(a) for a in expr.args]
+        for i in range(nargs-1):
+            # Max of the last 2 arguments in the array
+            template = func_call % (args_code[-2], args_code[-1])
+            # Remove the last 2 entries and append the max of the last 2
+            del args_code[-2:]
+            args_code.append(template)
+        return str(args_code[0])
+
+    def _print_sign(self, expr):
+        """signum function using ternary operators"""
+
+        args = map(ccode, expr.args)
+        args = [x for x in args]
+        result = ','.join(args)
+        result = '(%s > 0) ? 1 : ((%s < 0) ? -1 : 0)' % (result, result)
+        return result
 
     def _print_DataObject(self, expr):
         """Raise error if a DataObject is found in the equation"""
@@ -117,19 +214,60 @@ class OPSCCodePrinter(C99CodePrinter):
     def _print_DataSetBase(self, expr):
         return str(expr)
 
+    def _print_Pow(self, expr):
+        """ Replace pow function calls with direct multiplication."""
+        if isinstance(SimulationDataType.dtype(), FloatC):
+            sqrt, pow_func, one = 'sqrtf(', 'powf(', '1.0f'
+        else:
+            sqrt, pow_func, one = 'sqrt(', 'pow(', '1.0'
+        PREC = precedence(expr)
+        if expr.exp in range(2, 7):
+            return '(' + '*'.join([self.parenthesize(expr.base, PREC)] * int(expr.exp)) + ')'
+        elif expr.exp in range(-6, 0):
+            return '%s/(' % one + ('*'.join([self.parenthesize(expr.base, PREC)] * int(-expr.exp))) + ')'
+        elif expr.exp == Rational(3,2):
+            return '*'.join([self.parenthesize(expr.base, PREC)] + [sqrt + self.parenthesize(expr.base, PREC) + ')'])
+        elif expr.exp == Rational(1,2):
+            return '*'.join([sqrt + self.parenthesize(expr.base, PREC) + ')'])
+        else:
+            if isinstance(SimulationDataType.dtype(), FloatC):
+                return '*'.join([pow_func + self.parenthesize(expr.base, PREC) + ', ' + str(expr.exp) + ')'])
+            else:
+                return super()._print_Pow(expr)
+
     def _print_Equality(self, expr):
-        return "%s == %s" % (self._print(expr.lhs), self._print(expr.rhs))
+        from opensbli.equation_types.opensbliequations import OpenSBLIEquation
+        if isinstance(expr, OpenSBLIEquation):
+            return "%s = %s" % (self._print(expr.lhs), self._print(expr.rhs))
+        else:
+            return "%s == %s" % (self._print(expr.lhs), self._print(expr.rhs))
 
     def _print_DataSet(self, expr):
         """ Prints the OpenSBLI dataset in the OPS format with the access numbers provided.
         Access numbers are updated for each kernel, see writing kernel in the OPSC class. """
         base = expr.base
-        if self.dataset_accs_dictionary[base]:
-            indices = expr.get_grid_indices
-            out = "%s[%s(%s)]" % (self._print(base), self.dataset_accs_dictionary[base].name, ','.join([self._print(i) for i in indices]))
+        indices = expr.get_grid_indices
+        out = ""
+        # print(expr.__dict__)
+        if self.cast_precision: # Change precision on the RHS of the equation only for certain quantites
+            if hasattr(expr, "cast_precision") and not expr.cast_precision:
+                pass # No casting on left hand side of equations
+            elif hasattr(expr, "cast_precision") and expr.cast_precision: # Force the computation to be performed in lower precision on the RHS of the equations
+                if base in self.settings_opsc['arrays_to_cast']:
+                    # Change precision to that of the global simulation datatype
+                    out += "(%s)" % SimulationDataType.dtype().opsc()
+            else:
+                print("Quantity: {} does not have this attribute.".format(expr))
+
+        # Write the C code for this DataSet
+        if self.settings_opsc.get('OPS_V2', True):
+            out += "%s(%s)" % (self._print(base), ','.join([self._print(i) for i in indices]))
             return out
         else:
-            raise ValueError("Did not find the OPS Access for %s " % expr.base)
+            if self.dataset_accs_dictionary[base]:
+                out += "%s[%s(%s)]" % (self._print(base), self.dataset_accs_dictionary[base].name, ','.join([self._print(i) for i in indices]))
+            else:
+                raise ValueError("Did not find the OPS Access for DataSet %s " % expr.base)
 
 #MBCHANGE
     def _print_IndexedBase(self, expr):
@@ -155,7 +293,7 @@ class OPSCCodePrinter(C99CodePrinter):
         return out
 
     def _print_UserFunction(self, fn):
-        """ Prints the user defined funtion, we do not check if the funciton exists in the header files.
+        """ Prints the user defined funtion, we do not check if the function exists in the header files.
         This allows for users to write their own OPS functions and use them in the code."""
         return self._print(fn.args[0]) + '(%s)' % (', '.join([self._print(arg) for arg in fn.args[1:]]))
 
@@ -167,16 +305,23 @@ def pow_to_constant(expr):
     inverse_terms = {}
     # Change the name of Rational counter to rcinv
     orig_name = rc.name
-    rc.name = 'rcinv%d'
 
     for at in expr.atoms(Pow):
         # Remove common 1 / (gama - 1) factors
         if at is (1 / (ConstantObject('gama') - 1)):
+            # print(at)
+            rc.name = 'inv_' + 'gamma_m1'
             if at in rc.existing:
                 inverse_terms[at] = rc.existing[at]
             else:
                 inverse_terms[at] = rc.get_next_rational_constant(at)
         if _coeff_isneg(at.exp) and isinstance(at.base, ConstantObject):
+            if (at.exp < -1):
+                name = 'inv' + str(int(abs(at.exp))) + str(at.base)
+                rc.name = name
+            else:
+                name = 'inv' + str(at.base)
+                rc.name = name
             if at in rc.existing:
                 inverse_terms[at] = rc.existing[at]
             else:
@@ -195,13 +340,20 @@ def ccode(expr, settings={}):
     :returns: The expression in OPSC code.
     :rtype: str."""
     if isinstance(expr, Equality):
+        if 'boolean_equality' in settings.keys():
+            if settings['boolean_equality']:
+                equals = ' == '
+            else:
+                equals = ' = '
+        else:
+            equals = ' = '
         if 'rational' in settings.keys():
             pass
         else:
             expr = pow_to_constant(expr)
         code_print = OPSCCodePrinter(settings)
         code = code_print.doprint(expr.lhs) \
-            + ' = ' + OPSCCodePrinter(settings).doprint(expr.rhs)
+            + equals + OPSCCodePrinter(settings).doprint(expr.rhs)
         if isinstance(expr.lhs, GridVariable):
             code = code
         return code
@@ -248,30 +400,51 @@ def indent_code(code_lines):
 
 
 class OPSC(object):
-    ops_headers = {'input': "const %s *%s", 'output': '%s *%s', 'inout': '%s *%s'}
-
-    def __init__(self, algorithm, operation_count=False, OPS_diagnostics=1):
+    def __init__(self, algorithm, operation_count=False, OPS_diagnostics=1, OPS_V2=True, mixed_precision_config=None):
         """ Generating an OPSC code from the algorithm class.
         :arg object algorithm: An OpenSBLI algorithm class.
         :arg bool operation_count: If True, prints the number of arithmetic operations per kernel.
         :arg int OPS_diagnostics: OPS performance diagnostics. The default of 1 provides no kernel-based timing output
-        A value of 5 gives a kernel breakdown of computational kernel and MPI exchange time."""
-
+        A value of 5 gives a kernel breakdown of computational kernel and MPI exchange time.
+        :arg bool OPS_V2: If True, uses the concise syntax in OPS for datasets (no explicit OPS_ARG number in kernels)."""
+        if OPS_V2:
+            self.ops_headers = {'input': "const ACC<%s> &%s", 'output': 'ACC<%s> &%s', 'inout': 'ACC<%s> &%s'}
+        else:
+            self.ops_headers = {'input': "const %s *%s", 'output': '%s *%s', 'inout': '%s *%s'}
+        self.OPS_V2 = OPS_V2
         # if not algorithm.MultiBlock:
         self.operation_count = operation_count
         self.OPS_diagnostics = OPS_diagnostics
         self.MultiBlock = False
-        self.dtype = algorithm.dtype
+        self.nblocks = len(algorithm.block_descriptions)
+        self.const_fname = 'constants.h'
         # Check if the simulation monitoring should be written to an output log file
         if algorithm.simulation_monitor:
-            if algorithm.simulation_monitor.output_file:
+            if len(algorithm.simulation_monitor.output_files) > 0:
                 self.monitoring_output_file = True
+            else:
+                self.monitoring_output_file = False
         else:
             self.monitoring_output_file = False
+        # Process any mixed precision customisations
+        self.mixed_precision_config = mixed_precision_config
+        self.arrays_to_cast = []
+        if self.mixed_precision_config is not None:
+            if 'casting' in self.mixed_precision_config:
+                if self.mixed_precision_config['casting']:
+                    self.cast_precision = True
+                else:
+                    self.cast_precision = False
+                del self.mixed_precision_config['casting']
+            else:
+                self.cast_precision = False
+            self.modify_dataset_precision(algorithm)
+        else:
+            self.cast_precision = False
         # First write the kernels, with this we will have the Rational constants to declare
         self.write_kernels(algorithm)
         def_decs = self.opsc_def_decs(algorithm)
-        end = self.ops_exit()
+        end = self.ops_exit(algorithm)
         algorithm.prg.components = def_decs + algorithm.prg.components + end
         code = algorithm.prg.opsc_code
         code = self.before_main(algorithm) + code
@@ -279,6 +452,80 @@ class OPSC(object):
         f.write('\n'.join(code))
         f.close()
         print("Successfully generated the OPS C code.")
+        return
+
+    def modify_dataset_precision(self, algorithm):
+        """ Apply mixed precision options - change precision of certain quantities relative to the global simulation precision."""
+        simulation_dsets = []
+        # Get all the datasets defined in the simulation
+        for d in algorithm.definitions_and_declarations.components:
+            if isinstance(d, DataSetBase):
+                simulation_dsets.append(d)
+        # Add any missing ones
+        for b in algorithm.blocks:
+            for k, v, in b.block_datasets.items():
+                simulation_dsets.append(v)
+        # Remove duplicates
+        simulation_dsets = list(set(simulation_dsets))
+        # Change casting behaviour - force the quantities to lower precision in all RHS calculations
+        if self.mixed_precision_config is not None:
+            # Process the different input strategies to perform the precision changes
+            for strategy, inputs in self.mixed_precision_config.items():
+                # Get the inputs
+                store_dsets = []
+                arrays, modified_precision = [x.base for x in flatten(inputs[0])], inputs[1]
+                # Different preset strategies
+                # Time advance arrays (rho, rhou, rhov, rhow, rhoE)
+                if strategy == 'q_vector':
+                    lhs = [x.base for x in algorithm.time_advance_arrays]
+                    for d in simulation_dsets:
+                        if d in lhs:
+                            d.datatype = modified_precision
+                            store_dsets.append(d)
+                # Work arrays used for temporary derivative calculations (StoreSome, and others)
+                elif strategy == 'wk_arrays':
+                    for d in simulation_dsets:
+                        if 'wk' in str(d):
+                            store_dsets.append(d)
+                            d.datatype = modified_precision
+                # Residual arrays used for time-advancement
+                elif strategy == 'residuals':
+                    for d in simulation_dsets:
+                        if 'Residual' in str(d):
+                            store_dsets.append(d)
+                            d.datatype = modified_precision
+                # Intermediate arrays used for time-stepping, filters
+                elif strategy == 'RK_arrays':
+                    RK_arrays = []
+                    for b in flatten(algorithm.blocks):
+                        for label, sc in b.discretisation_schemes.items():
+                            if sc.schemetype == 'Temporal':
+                                RK_arrays.append(sc.temp_RK_arrays)
+                    RK_arrays = [x.base for x in flatten(RK_arrays)]
+                    for d in simulation_dsets:
+                            if d in RK_arrays:
+                                store_dsets.append(d)
+                                d.datatype = modified_precision
+                # Custom input, user specified arrays
+                elif strategy == 'custom':
+                    for d in simulation_dsets:
+                        if d in arrays:
+                            store_dsets.append(d)
+                            # print("Before:", d.datatype.opsc())
+                            d.datatype = modified_precision
+                            # print("After:", d.datatype.opsc())
+                else:
+                    raise ValueError("Unknown mixed precision preset: {}. Please choose from: q_vector, wk_arrays, residuals, RK_arrays, or custom.".format(strategy))
+                store_dsets = sorted(store_dsets, key=lambda x: str(x))
+                # Casting behaviour for the mixed-precision strategies
+                if self.cast_precision:
+                    self.arrays_to_cast += store_dsets
+                print("Performed mixed precision on: {} - Modified precision of: {} from {} to {}.".format(strategy, store_dsets, SimulationDataType.dtype().opsc(), modified_precision.opsc()))
+
+                # For preset values (non-custom) - update the list of arrays that had their precision modified
+                self.mixed_precision_config[strategy] = (store_dsets, modified_precision)
+        else: # No mixed precision
+            pass    
         return
 
     def wrap_long_lines(self, code_lines):
@@ -316,20 +563,63 @@ class OPSC(object):
                     raise ValueError("The code and the formatted line are not same")
             else:
                 formatted_code += [code]
-
         return formatted_code
 
-    def kernel_header(self, tuple_list):
+    def check_failed_central(self, code, kernel):
+        """ Warns the user and exits code-generation if one of the CentralDerivatives failed to discretize and a code was not produced."""
+        for line in code:
+            if "CentralDerivative" in line:
+                print('\33[91m' + "WARNING: Code generation failed to discretize derivative: {} in kernel: '{}', this code will not compile.".format(line, kernel.computation_name) + '\033[0m')
+                exit()
+            elif "Not supported in C" in line:
+                print('\33[91m' + "WARNING: Code generation failed to discretize derivative: {} in kernel: '{}', this code will not compile.".format(line, kernel.computation_name) + '\033[0m')
+                exit()
+        return
+
+    def kernel_header(self, tuple_list, idx_constants):
         code = []
-        dtype = SimulationDataType.opsc()
+        ins, outs, inouts = [x for x in tuple_list if x[1] == 'input'], [x for x in tuple_list if x[1] == 'output'], [x for x in tuple_list if x[1] == 'inout']
+        ins, outs, inouts = sorted(ins, key=lambda x: str(x[0])), sorted(outs, key=lambda x: str(x[0])), sorted(inouts, key=lambda x: str(x[0]))
+        tuple_list = ins + outs + inouts + idx_constants
         for key, val in (tuple_list):
-            # if any of the list has the datatype then use the data type
-            if hasattr(key, "datatype") and key.datatype:
-                code += [self.ops_headers[val] % (key.datatype.opsc(), key)]
+            if str(key) == 'rkA' or str(key) == 'rkB' or str(key) == 'rkold' or str(key) == 'rknew': # RK coefficients in the kernel header
+                if hasattr(key, "datatype") and key.datatype:
+                    code += ['const %s *%s' % (key.datatype.opsc(), key)]
+                else:
+                    code += ['const %s *%s' % (SimulationDataType.opsc(), key)]
+            elif str(key) == 'iter': # current iteration counter
+                code += ['const int *%s' % key]
+            elif isinstance(key, ReductionVariable):
+                if key.reduction_type == 'OPS_INC': # summation reduction variables
+                    code += ['%s *%s' % (key.datatype.opsc(), key)]
+                elif val == 'input':
+                    code += ['const %s *%s' % (key.datatype.opsc(), key)]
+                else:
+                    code += ['%s *%s' % (key.datatype.opsc(), key)]
             else:
-                code += [self.ops_headers[val] % (dtype, key)]
+                # Argument is a DataSet
+                # Re-apply mixed precision if needed - some DataSets revert back to the simulation datatype - why?
+                if hasattr(key, "datatype") and key.datatype:
+                    if self.mixed_precision_config is not None:
+                        for k, v in self.mixed_precision_config.items():
+                            to_modify = [str(x) for x in flatten(v[0])]
+                            if str(key) in to_modify:
+                                key.datatype = v[1]
+                    code += [self.ops_headers[val] % (key.datatype.opsc(), key)]
+                else:
+                    raise ValueError("Dataset: {} is missing its datatype.".format(key))
         code = ', '.join(code)
         return code
+
+    def add_casting_switch(self, input_eqn):
+        RHS_args = input_eqn.rhs.args
+        for argument in RHS_args:
+            for dset in argument.atoms(DataSet):
+                if str(dset) in [str(x) for x in self.arrays_to_cast]:
+                    dset.cast_precision = True
+                else:
+                    dset.cast_precision = False
+        return input_eqn
 
     def kernel_computation_opsc(self, kernel):
         """ Function to write the out the contents of each computational kernel."""
@@ -347,59 +637,153 @@ class OPSC(object):
             raise NotImplementedError("Input output of global variables is not implemented")
         all_dataset_inps += list(global_ins) + list(global_outs)
         all_dataset_types += ['input' for i in global_ins] + ['output' for o in global_outs]
+        # Add any reduction variables present in the kernel, to generate the kernel headers
+        reduction_ins, reduction_outs = kernel.reduction_variables
+        all_dataset_inps += list(reduction_ins) + list(reduction_outs)
+        all_dataset_types += ['input' for i in reduction_ins] + ['output' for o in reduction_outs]
         # Use list of tuples as dictionary messes the order
         header_dictionary = list(zip(all_dataset_inps, all_dataset_types))
+        idx_constants = []
         if kernel.IndexedConstants:
-            for i in kernel.IndexedConstants:
-                header_dictionary += [tuple([(i.base), 'input'])]
+            for i in sorted(kernel.IndexedConstants, key=lambda x: str(x)):
+                idx_constants += [tuple([(i.base), 'input'])]
         other_inputs = ""
+        # Local i, j, k index object (ignores MPI)
         if kernel.grid_indices_used:
-            # print kernel.grid_index_name
             other_inputs += ", const int *idx"  # WARNING hard coded here
         else:
             other_inputs = ''
-        # print header_dictionary
-        code = ["void %s(" % kernel.kernelname + self.kernel_header(header_dictionary) + other_inputs + ')' + '\n{']
+        code = ["void %s(" % kernel.kernelname + self.kernel_header(header_dictionary, idx_constants) + other_inputs + ')' + '\n{']
         ops_accs = [OPSAccess(no) for no in range(len(all_dataset_inps))]
         OPSCCodePrinter.dataset_accs_dictionary = dict(zip(all_dataset_inps, ops_accs))
         # Find all the grid variables and declare them at the top
         gridvariables = set()
         out = []
         for eq in kernel.equations:
+            default_kernel_settings = {'kernel': True, 'OPS_V2': self.OPS_V2, 'arrays_to_cast' : self.arrays_to_cast}
+            bool_settings = {'kernel': True, 'OPS_V2': self.OPS_V2, 'arrays_to_cast' : self.arrays_to_cast, 'boolean_equality' : True}
+            # Note which DataSets are used on the LHS of equations
+            if self.cast_precision:
+                if isinstance(eq, GroupedPiecewise):
+                    for i, (expr, condition) in enumerate(eq.args):
+                        # Process all grouped equations within this condition
+                        for single_eqn in expr:
+                            # Don't cast LHS
+                            LHS_of_equation = single_eqn.lhs
+                            if isinstance(LHS_of_equation, DataSet):
+                                single_eqn.lhs.cast_precision = False
+                            # Loop over all arguments of this equation
+                            single_eqn = self.add_casting_switch(single_eqn)
+                            # Make sure LHS is not cast
+                            # if not isinstance(LHS_of_equation, GridVariable):
+                            #     single_eqn.lhs.cast_precision = False
+                elif isinstance(eq, WhileLoop):
+                    raise ValueError("Mixed precision not implemented yet for WhileLoop.")
+                elif isinstance(eq, ForLoop):
+                    raise ValueError("Mixed precision not implemented yet for ForLoop.")
+                else: # Regular equations
+                    # Never cast precision of left-hand side assignments
+                    LHS_of_equation = eq.lhs
+                    if isinstance(eq.lhs, DataSet):
+                        eq.lhs.cast_precision = False
+                    # # Check for Piecewise conditions
+                    if isinstance(eq.rhs, Piecewise):
+                        eq.lhs.cast_precision = False
+                    else: # LHS of the equation is a DataSet
+                        # # Quantity does not appear on the right hand side of the equation also
+                        # if LHS_of_equation not in eq.rhs.atoms(DataSet):
+                        #     eq.lhs.cast_precision = True
+                        if isinstance(eq.rhs, Piecewise):
+                            for pairs in eq.rhs.args:
+                                pw_expr = pairs[0]
+                                for dset in pw_expr.atoms(DataSet):
+                                    dset.cast_precision = True
+                            eq.lhs.cast_precision = False
+                        else: # Regular equation
+                            eq = self.add_casting_switch(eq)
+                            # Make sure LHS is not cast
+                            if not isinstance(LHS_of_equation, GridVariable):
+                                eq.lhs.cast_precision = False
+
+            # Get the grid variables
             gridvariables = gridvariables.union(eq.atoms(GridVariable))
+            # Get the reduction variables and detect whether they are input or output
             if isinstance(eq, Equality):
-                out += [ccode(eq, settings={'kernel': True}) + ';\n']
+                for rv in eq.lhs.atoms(ReductionVariable):
+                    rv.usage = 'lhs'
+                for rv in eq.rhs.atoms(ReductionVariable):
+                    rv.usage = 'rhs'
+
+            if isinstance(eq, Equality):
+                out += [ccode(eq, settings=default_kernel_settings) + ';\n']
             elif isinstance(eq, GroupedPiecewise):
                 for i, (expr, condition) in enumerate(eq.args):
                     if i == 0:
-                        out += ['if (%s)' % ccode(condition, settings={'kernel': True}) + '{\n']
+                        out += ['if (%s)' % ccode(condition, settings=bool_settings) + '{\n']
                         if is_sequence(expr):
                             for eqn in expr:
-                                out += [ccode(eqn, settings={'kernel': True}) + ';\n']
+                                out += [ccode(eqn, settings=default_kernel_settings) + ';\n']
                         else:
-                            out += [ccode(expr, settings={'kernel': True}) + ';\n']
+                            out += [ccode(expr, settings=default_kernel_settings) + ';\n']
                         out += ['}\n']
                     elif condition != True:
-                        out += ['else if (%s)' % ccode(condition, settings={'kernel': True}) + '{\n']
+                        out += ['else if (%s)' % ccode(condition, settings=bool_settings) + '{\n']
                         if is_sequence(expr):
                             for eqn in expr:
-                                out += [ccode(eqn, settings={'kernel': True}) + ';\n']
+                                out += [ccode(eqn, settings=default_kernel_settings) + ';\n']
                         else:
-                            out += [ccode(expr, settings={'kernel': True}) + ';\n']
+                            out += [ccode(expr, settings=default_kernel_settings) + ';\n']
                         out += ['}\n']
                     else:
                         out += ['else{\n']
                         if is_sequence(expr):
                             for eqn in expr:
-                                out += [ccode(eqn, settings={'kernel': True}) + ';\n']
+                                out += [ccode(eqn, settings=default_kernel_settings) + ';\n']
                         else:
-                            out += [ccode(expr, settings={'kernel': True}) + ';\n']
+                            out += [ccode(expr, settings=default_kernel_settings) + ';\n']
                         out += ['}\n']
+            elif isinstance(eq, WhileLoop):
+                for i, (expr, condition) in enumerate(eq.args):
+                    if i == 0:
+                        out += ['while (%s)' % ccode(condition, settings=bool_settings) + '{\n']
+                        if is_sequence(expr):
+                            for eqn in expr:
+                                out += [ccode(eqn, settings=default_kernel_settings) + ';\n']
+                        else:
+                            out += [ccode(expr, settings=default_kernel_settings) + ';\n']
+                        out += ['}\n']
+                    elif i == 1:
+                        pass
+                    else:
+                        raise ValueError("While Loop should only have two conditions.")
+            elif isinstance(eq, ForLoop):
+                for i, (expr, condition) in enumerate(eq.args):
+                    if i == 0:
+                        start = condition
+                        evaluate = expr
+                    elif i == 1:
+                        end = expr
+                    else:
+                        raise ValueError("While Loop should only have two conditions.")
+                # Create the C code for the for loop and populate it with equations
+                iteration_index = start.lhs      
+                out += ['for (int %s; %s; %s++)' % ((ccode(start, settings=default_kernel_settings), ccode(end, settings=bool_settings), ccode(iteration_index, settings=bool_settings))) + '{\n']
+                # Add equations inside the for loop
+                if is_sequence(evaluate):
+                    for eqn in evaluate:
+                        out += [ccode(eqn, settings=default_kernel_settings) + ';\n']
+                else:
+                    out += [ccode(evaluate, settings=default_kernel_settings) + ';\n']
+                out += ['}\n']
             else:
                 pprint(eq)
                 raise TypeError("Unclassified type of equation.")
+        # Sort the gridvariables to fix the order
+        gridvariables = sorted(list(gridvariables), key=lambda x: str(x))
         for gv in gridvariables:
             code += ["%s %s = 0.0;" % (SimulationDataType.opsc(), str(gv))]
+        # if '\n' in out[-1]:
+        #     out[-1] = out[-1].replace('\n', '', out[-1].count(' \n ')-1)
         code += out + ['}']  # close Kernel
         OPSCCodePrinter.dataset_accs_dictionary = {}
         return code
@@ -427,64 +811,82 @@ class OPSC(object):
             out = indent_code(out)
             out = self.wrap_long_lines(out)
             files[k.block_number].write('\n'.join(out))
+            # Check for any failed discretisation
+            self.check_failed_central(out, k)
         for f in files:
             f.write("#endif\n")
         files = [f.close() for f in files]
         return
 
-    def ops_exit(self):
+    def ops_exit(self, algorithm):
         """ Exits the OPS program with optional kernel-based timing output."""
         output = []
         if self.OPS_diagnostics > 1:
-            output += [WriteString("ops_timing_output(stdout);")]
+            output += [WriteString("ops_timing_output(std::cout);")]
         if self.monitoring_output_file:
-            output += [WriteString("fclose(f);")]
+            for i in range(len(algorithm.simulation_monitor.output_files)):
+                index = algorithm.simulation_monitor.blocks[i].blocknumber
+                output += [WriteString("fclose(f%d);" % index)]
         output += [WriteString("ops_exit();")]
         return output
 
     def before_main(self, algorithm):
         """ Adds the required preamble to the main opensbli.cpp file and declares the simulation constants."""
-        out = ['#include <stdlib.h> \n#include <string.h> \n#include <math.h>']
+        out = ['#include <stdlib.h> \n#include <string.h> \n#include <math.h> \n#include "constants.h"' ]
         from opensbli.core.kernel import ConstantsToDeclare
-        for d in ConstantsToDeclare.constants:
+        # Declare a restart flag and loop variables globally
+        constant_declarations = ["%s %s;" % ('int', 'restart')]
+        constant_declarations += ["%s %s;" % ('int', 'iter')]
+        constant_declarations += ["%s %s;" % ('int', 'stage')]
+        constant_declarations += ["%s %s;" % (SimulationDataType.opsc(), 'tstart')]
+
+        # Write the constants to a separate file instead
+        for d in sorted(ConstantsToDeclare.constants, key=lambda x: str(x)):
             if isinstance(d, ConstantObject):
-                out += ["%s %s;" % (d.datatype.opsc(), d)]
+                constant_declarations += ["%s %s;" % (d.datatype.opsc(), d)]
             elif isinstance(d, ConstantIndexed):
                 if not d.inline_array:
                     indices = ''
                     for s in d.shape:
                         indices = indices + '[%d]' % s
-                    out += ["%s %s%s;" % (d.datatype.opsc(), d.base.label, indices)]
-        for b in algorithm.block_descriptions:
-            out += ['#define OPS_%dD' % b.ndim]
+                    constant_declarations += ["%s %s%s;" % (d.datatype.opsc(), d.base.label, indices)]
+        # Write the constant declarations to a separate file
+        const_file = open(self.const_fname, 'w')
+        const_file.write('\n'.join(['// Declaration of global constants'] + flatten(constant_declarations)))
+        const_file.close()
+        # Declare the simulation blocks
+        out += ['#define OPS_%dD' % algorithm.block_descriptions[0].ndim]
+        if self.OPS_V2:
+            out += ['#define OPS_API 2']
         out += ['#include \"ops_seq.h\"']
         for b in algorithm.block_descriptions:
             out += ['#include \"%s_kernels.h\"' % b.block_name]
+        # IO and constant functions
+        out += ['#include "io.h"']
         # Include optional simulation monitoring reductions file
         if algorithm.simulation_monitor:
+            self.opened = []
             out += ['#include \"%s\"' % algorithm.simulation_monitor.filename]
-            if algorithm.simulation_monitor.output_file:
-                out += ['FILE *f = fopen(\"%s\", \"w\");' % str(algorithm.simulation_monitor.output_file)]
+            if len(algorithm.simulation_monitor.output_files) > 0:
+                for i in range(len(algorithm.simulation_monitor.output_files)):
+                    index = algorithm.simulation_monitor.blocks[i].blocknumber
+                    out += ['FILE *f%d = fopen(\"%s\", \"a\");' % (index, str(algorithm.simulation_monitor.output_files[i]))]
         return out
 
     def opsc_def_decs(self, algorithm):
         """ Declares the datasets and stencils required by the program."""
         from opensbli.core.kernel import StencilObject, ConstantsToDeclare
         from opensbli.core.boundary_conditions.exchange import Exchange
-
-        defs = []
-        decls = []
-        # Add OPS_init to the declarations as it should be called before all ops
-        decls += self.ops_init()
+        output = []
+        # Add OPS_init to the declarations
+        output += self.ops_init()
+        # Sort the constants to a consistent ordering
+        ConstantsToDeclare.sort_constants()
         # First process all the constants in the definitions
-        for d in ConstantsToDeclare.constants:
-            if isinstance(d, Constant):
-                defs += self.define_constants(d)
-                decls += self.declare_ops_constants(d)
+        output += self.set_constant_values(ConstantsToDeclare.constants)
+        # OPS declaration of the constants
+        output += self.declare_ops_constants(ConstantsToDeclare.constants)
         # Once the constants are done define and declare OPS dats
-        output = defs + decls
-        defs = []
-        decls = []
         # Define and declare blocks
         for b in algorithm.block_descriptions:
             output += self.declare_block(b)
@@ -493,27 +895,43 @@ class OPSC(object):
         datasets_dec = []
         output += [WriteString("#include \"defdec_data_set.h\"")]
         # Sort the declarations alphabetically before writing out
-        store_stencils, store_dsets = [], []
-        for d in algorithm.defnitionsdeclarations.components:
+        store_stencils, store_dsets, store_reductions = [], [], []
+        for d in algorithm.definitions_and_declarations.components:
             if isinstance(d, DataSetBase):
                 store_dsets.append(d)
             elif isinstance(d, StencilObject):
                 store_stencils.append(d)
+            elif isinstance(d, ReductionVariable):
+                store_reductions.append(d)
             else:
                 print(d)
                 print(type(d))
-                raise TypeError("Not a stencil or dataset declaration.")
+                raise TypeError("Quantity: {} is not defined within the simulation and cannot be declared.".format(d))
         dsets_to_declare = dict([(str(x), x) for x in store_dsets])
 
         for name in sorted(dsets_to_declare, key=str.lower):
             d = dsets_to_declare[name]
-            datasets_dec += self.declare_dataset(d)
+            datasets_dec += self.declare_dataset(d, algorithm)
         f.write('\n'.join(flatten([dset.opsc_code for dset in datasets_dec])))
+        f.write('\n')
         f.close()
         # Declare stencils
         output += [WriteString("// Define and declare stencils")]
+        f = open('stencils.h', 'w')
+        output += [WriteString("#include \"stencils.h\"")]
+        stencil_declarations = []
         for d in store_stencils:
-            output += self.ops_stencils_declare(d)
+            stencil_declarations += self.ops_stencils_declare(d)
+        f.write('\n'.join(flatten([x.opsc_code for x in stencil_declarations])))
+        f.write('\n')
+        f.close()
+
+        # Define reduction operation handles (global min, max reductions ...)
+        if len(store_reductions) > 0:
+            output += [WriteString("// Define and declare OPS reduction handles")]
+            for rv in store_reductions:
+                output += self.declare_reduction(rv)
+
         # Loop through algorithm components to include any halo exchanges
         exchange_list = self.loop_alg(algorithm, Exchange)
         if exchange_list:
@@ -523,14 +941,39 @@ class OPSC(object):
                 call, code = self.bc_exchange_call_code(e)
                 exchange_code += [code]
             f.write('\n'.join(flatten(exchange_code)))
+            f.write('\n')
             f.close()
             output += [WriteString("#include \"bc_exchanges.h\"")]  # Include statement in the code
+        # Write HDF5 I/O calls to a separate file
+        io_file = open('io.h', 'w')
+        io_file.close()
         output += self.ops_partition()
+        # Notify whether the simulation is being restarted or not
+        output += self.restart_notification()
+        # This MUST be done after the partition command to avoid MPI HDF5 errors
+        output += self.restart_simulation()
         return output
+
+    def restart_simulation(self):
+        """ Initialises the simulation time and iteration number from file if restarting the simulation."""
+        out = [WriteString('// Constants from HDF5 restart file')]
+        out += [WriteString('if (restart == 1){')]
+        for c in self.restarted_constants:
+            if c.name == 'start_iter':
+                out += [WriteString('ops_get_const_hdf5(\"%s\", 1, \"%s\", (char*)&%s, "restart.h5");' % ('iter', c.datatype.opsc(), c.name))]
+            else:
+                out += [WriteString('ops_get_const_hdf5(\"%s\", 1, \"%s\", (char*)&%s, "restart.h5");' % (c.name, c.datatype.opsc(), c.name))]
+        out += [WriteString('}')]
+        out += [WriteString('else {')]
+        for c in self.restarted_constants:
+            out += [WriteString("%s = %s;" % (str(c), c.value))]
+        out += [WriteString('}')]
+        out += [WriteString('tstart = simulation_time;\n')]
+        return out
 
     def ops_stencils_declare(self, s):
         out = []
-        dtype = s.dtype.opsc()
+        dtype = s.datatype.opsc()
         name = s.name + 'temp'
         sorted_stencil = s.sort_stencil_indices()
         out = [self.declare_inline_array(dtype, name, [st for st in flatten(sorted_stencil) if not isinstance(st, Idx)])]
@@ -542,7 +985,30 @@ class OPSC(object):
 
         :returns: The partitioning code in OPSC format. Each line is a separate list element.
         :rtype: list"""
-        return [WriteString('// Init OPS partition'), WriteString('ops_partition(\"\");\n')]
+        output = [WriteString('// Init OPS partition')]
+        # Add timers to MPI partition time
+        output += [WriteString('double partition_start0, elapsed_partition_start0, partition_end0, elapsed_partition_end0;')]
+        output += [WriteString('ops_timers(&partition_start0, &elapsed_partition_start0);')]
+        output += [WriteString('ops_partition(\"\");')]
+        output += [WriteString('ops_timers(&partition_end0, &elapsed_partition_end0);')]
+        output += [WriteString('ops_printf("-----------------------------------------\\n MPI partition and reading input file time: %lf\\n -----------------------------------------\\n", elapsed_partition_end0-elapsed_partition_start0);')]
+        # output += [WriteString('fflush(stdout);\n')]
+        return output
+
+    def restart_notification(self):
+        """ Notifies the user whether the simulation is being restarted from file or not."""
+        out = [WriteString('// Restart procedure')]
+        out += [WriteString('ops_printf("\\033[1;32m\");')]
+        out += [WriteString('if (restart == 1){')]
+        ### Add the simulation time afterwards ###
+        out += [WriteString('ops_printf("OpenSBLI is restarting from the input file: restart.h5\\n");')]
+        out += [WriteString("}")]
+        # Else clause
+        out += [WriteString('else {')]
+        out += [WriteString('ops_printf("OpenSBLI is starting from the initial condition.\\n");')]
+        out += [WriteString("}")]
+        out += [WriteString('ops_printf("\\033[0m");')]
+        return out
 
     def ops_init(self):
         """ The default diagnostics level is 1, which offers no diagnostic information and should be used for production runs.
@@ -569,7 +1035,7 @@ class OPSC(object):
         # dir in OPSC. WARNING: Not sure what it is, but 1 to ndim works.
         from_dir = [ind+1 for ind in range(len(instance.transfer_to))]
         to_dir = [ind+1 for ind in range(len(instance.transfer_to))]
-        # MBCHANGE
+        # MBCHANGE - flip the direction if True
         if instance.flip[-1]:
             to_dir[instance.flip[1]] = -to_dir[instance.flip[1]]
         # MBCHANGE
@@ -622,44 +1088,54 @@ class OPSC(object):
         else:
             raise NotImplementedError("")
 
-    def define_constants(self, c):
+    def set_constant_values(self, constants):
         """ Declares all of the constants required by the simulation at the start of the program."""
-        # Fix spacing on constant declarations %s=%s
-        if isinstance(c, ConstantObject):
-            if not isinstance(c.value, str):
-                return [WriteString("%s = %s;" % (str(c), ccode(c.value, settings={'rational': True})))]
-            else:
-                return [WriteString("%s=%s;" % (str(c), c.value))]
-        elif isinstance(c, ConstantIndexed):
-            out = []
-            if c.value:
-                if len(c.shape) == 1:
-                    if c.inline_array:
-                        values = [ccode(c.value[i], settings={'rational': True}) for i in range(c.shape[0])]
-                        return [WriteString("%s %s[] = {%s};" % (c.datatype.opsc(), c.base.label, ', '.join(values)))]
-                    else:
-                        indices = ''
-                        for s in c.shape:
-                            indices = indices + '[%d]' % s
-                        out += [WriteString("%s %s%s;" % (c.base.label, indices))]
-                        for i in range(c.shape[0]):
-                            out += [WriteString("%s[%d] = %s;" % (str(c.base.label), i, ccode(c.value[i], settings={'rational': True})))]
-                        return out
+        # First restart any constants from HDF5 if required
+        out = []
+        out += [WriteString('// Set restart to 1 to restart the simulation from HDF5 file')]
+        restart = [c for c in constants if str(c) == 'restart'][0]
+        out += [WriteString("%s = %s;" % (str(restart), restart.value))]
+        constants.remove(restart)
+        # Find which constants to restart
+        self.restarted_constants = [x for x in constants if x.restart]
+        init_constants = [c for c in constants if not c.restart]
+        out += [WriteString('// User defined constant values')]
+        # Give priority to lengths used to calculate grid spacings
+        lengths = ['Lx', 'Ly', 'Lz', 'Lx0', 'Lx1', 'Lx2']
+        for c in sorted(init_constants, key=lambda x: str(x))[::-1]:
+            if str(c) in lengths:
+                init_constants.remove(c)
+                init_constants.insert(0, c)
+        # Write the rest of the constants
+        for c in init_constants:
+            if isinstance(c, ConstantObject):
+                if not isinstance(c.value, str):
+                    out += [WriteString("%s = %s;" % (str(c), ccode(c.value, settings={'rational': True})))]
                 else:
-                    raise NotImplementedError("Indexed constant declaration is done for only one ")
-            else:
-                raise NotImplementedError("")
-        else:
-            print(c)
-            raise ValueError("")
+                    out += [WriteString("%s=%s;" % (str(c), c.value))]
 
-    def declare_ops_constants(self, c):
+            elif isinstance(c, ConstantIndexed):
+                if c.value:
+                    if len(c.shape) == 1:
+                        if c.inline_array:
+                            values = [ccode(c.value[i], settings={'rational': True}) for i in range(c.shape[0])]
+                            out += [WriteString("%s %s[] = {%s};" % (c.datatype.opsc(), c.base.label, ', '.join(values)))]
+                        else:
+                            indices = ''
+                            for s in c.shape:
+                                indices = indices + '[%d]' % s
+                            out += [WriteString("%s %s%s;" % (c.base.label, indices))]
+                            for i in range(c.shape[0]):
+                                out += [WriteString("%s[%d] = %s;" % (str(c.base.label), i, ccode(c.value[i], settings={'rational': True})))]
+        return out
+
+    def declare_ops_constants(self, input_constants):
         """ Calls the OPS declare constant function for all of the defined constants."""
-        if isinstance(c, ConstantObject):
-            return [WriteString("ops_decl_const(\"%s\" , 1, \"%s\", &%s);" % (str(c), c.datatype.opsc(), str(c)))]
-        elif isinstance(c, ConstantIndexed):
-            return []
-        return
+        OPS_constant_declarations = []
+        for c in sorted(input_constants, key=lambda x: str(x)):
+            if isinstance(c, ConstantObject):
+                OPS_constant_declarations += [WriteString("ops_decl_const(\"%s\" , 1, \"%s\", &%s);" % (str(c), c.datatype.opsc(), str(c)))]
+        return OPS_constant_declarations
 
     def declare_inline_array(self, dtype, name, values):
         return WriteString('%s %s[] = {%s};' % (dtype, name, ', '.join([str(s) for s in values])))
@@ -690,33 +1166,82 @@ class OPSC(object):
                 halo_p += [0]
         return halo_m, halo_p
 
-    def declare_dataset(self, dset):
-        declaration = WriteString("ops_dat %s;" % dset)
-        out = [declaration, WriteString("{")]
+    def declare_reduction(self, rv):
+        """ Declare a reduction variable in the code with the necessary handles."""
+        dtype = SimulationDataType.dtype()
+        variable_declaration = WriteString("%s %s = 0.0;" % (dtype.opsc(), str(rv.value)))
+        handle_declaration = WriteString('ops_reduction %s = ops_decl_reduction_handle(sizeof(%s), \"%s\", \"reduction_%s\");' % (str(rv), dtype.opsc(), dtype.opsc(), str(rv)))
+        out = [variable_declaration, handle_declaration]
+        return out
 
-        if dset.dtype:
-            dtype = dset.dtype
+    def initialize_dataset(self, dset, dtype):
+        """ Initialize a dataset to zeros, not from a restart file."""
+        # Residual and time-advance arrays do not require halos unless using shock filter
+        if ('Residual' in str(dset) or 'tempRK' in str(dset) or 'RKold' in str(dset)):
+            hm, hp = [-5 for _ in range(len(dset.size))], [5 for _ in range(len(dset.size))]
+        else:
+            hm, hp = self.get_max_halos(dset.halo_ranges)
+        halo_p = self.declare_inline_array("int", "halo_p", hp)
+        halo_m = self.declare_inline_array("int", "halo_m", hm)
+        sizes = self.declare_inline_array("int", "size", [str(s) for s in (dset.size)])
+        base = self.declare_inline_array("int", "base", [0 for i in range(len(dset.size))])
+        value = WriteString("%s* value = NULL;" % dtype.opsc())
+        temp = '%s = ops_decl_dat(%s, 1, size, base, halo_m, halo_p, value, \"%s\", \"%s\");' % (dset,
+                                                                                                 dset.block_name, dtype.opsc(), dset)
+        return [halo_p, halo_m, sizes, base, value, WriteString(temp)]
+
+    def restart_dataset(self, dset, dtype, fname):
+        """ Initialize a dataset from a restart HDF5 file."""
+        temp = '%s = ops_decl_dat_hdf5(%s, 1, \"%s\", \"%s\", \"%s\");' % (dset,
+                                                                           dset.block_name, dtype.opsc(), dset, fname)
+        return [WriteString(temp)]
+
+    def declare_dataset(self, dset, algorithm):
+        """ Allocates memory for the storage arrays used by the simulation."""
+        # Left hand side of the equations, quantities advanced in time
+        time_advance_arrays = algorithm.time_advance_arrays
+        # Coordinates evaluated in the code (not read from a grid file), which should also be restarted
+        coordinates_to_restart = []
+        for b in algorithm.block_descriptions:
+            coordinates_to_restart += [str(x) for x in b.coordinate_arrays_to_restart]
+        # Set the datatype of the array to declare
+        if dset.datatype:
+            dtype = dset.datatype
         else:
             dtype = SimulationDataType.dtype()
-
-        if dset.read_from_hdf5:
-            temp = '%s = ops_decl_dat_hdf5(%s, 1, \"%s\", \"%s\", \"%s\");' % (dset,
-                                                                               dset.block_name, dtype.opsc(), dset, dset.input_file_name)
-            out += [WriteString(temp)]
+        # Create the code segment
+        declaration = WriteString("ops_dat %s;" % dset)
+        out = [declaration, WriteString("{")]
+        # Add a restart flag to make it easier to restart the time advance arrays
+        time_advance_arrays = [str(x) for x in time_advance_arrays]
+        # Restart flag to the time advance arrays
+        if str(dset) in time_advance_arrays:
+            if not dset.write_to_hdf5:
+                print('\33[91m' + "WARNING: Time-advance array: {} has not been set to be written to the restart file.".format(str(dset)) + '\033[0m')
+            out += [WriteString('if (restart == 1){')]
+            out += self.restart_dataset(dset, dtype, 'restart.h5')
+            out += [WriteString("}")]
+            # Else clause
+            out += [WriteString('else {')]
+            out += self.initialize_dataset(dset, dtype)
+            out += [WriteString("}")]
+        # Coordinates evaluated inside the code, not via an external grid file
+        elif str(dset) in coordinates_to_restart:
+            if not dset.write_to_hdf5:
+                print('\33[91m' + "WARNING: Coordinate array: {} is computed during the initialisation kernel but has not been set to be written to the restart file.".format(str(dset)) + '\033[0m')
+            out += [WriteString('if (restart == 1){')]
+            out += self.restart_dataset(dset, dtype, 'restart.h5')
+            out += [WriteString("}")]
+            # Else clause
+            out += [WriteString('else {')]
+            out += self.initialize_dataset(dset, dtype)
+            out += [WriteString("}")]
+        # All other arrays
         else:
-            # Residual and time-advance arrays do not require halos
-            if ('Residual' in str(dset) or 'tempRK' in str(dset) or 'RKold' in str(dset)):
-                hm, hp = [0 for _ in range(len(dset.size))], [0 for _ in range(len(dset.size))]
+            # Externally provided grid file or restart file
+            if dset.read_from_hdf5:
+                out += self.restart_dataset(dset, dtype, dset.input_file_name)
             else:
-                hm, hp = self.get_max_halos(dset.halo_ranges)
-            halo_p = self.declare_inline_array("int", "halo_p", hp)
-            halo_m = self.declare_inline_array("int", "halo_m", hm)
-            sizes = self.declare_inline_array("int", "size", [str(s) for s in (dset.size)])
-            base = self.declare_inline_array("int", "base", [0 for i in range(len(dset.size))])
-            value = WriteString("%s* value = NULL;" % dtype.opsc())
-            temp = '%s = ops_decl_dat(%s, 1, size, base, halo_m, halo_p, value, \"%s\", \"%s\");' % (dset,
-                                                                                                     dset.block_name, dtype.opsc(), dset)
-            out += [halo_p, halo_m, sizes, base, value, WriteString(temp)]
-
+                out += self.initialize_dataset(dset, dtype)
         out += [WriteString("}")]
         return out

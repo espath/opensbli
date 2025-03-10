@@ -1,8 +1,8 @@
 from opensbli.equation_types.opensbliequations import NonSimulationEquations, Discretisation, Solution
+from opensbli.schemes.spatial.scheme import CentralDerivative
 from opensbli.core.kernel import Kernel
 from sympy import flatten, pprint, Equality
 from opensbli.core.opensbliobjects import GroupedPiecewise
-
 
 class UserDefinedEquations(NonSimulationEquations, Discretisation, Solution):
     """User defined equations. No checking is performed.
@@ -18,6 +18,9 @@ class UserDefinedEquations(NonSimulationEquations, Discretisation, Solution):
         ret.computation_name = None
         # Optional halo type
         ret.halos = None
+        ret.kernel_merge = False # by default don't merge the kernels
+        cls._full_swap = False
+        ret.custom_grid_range = None
         return ret
 
     @property
@@ -39,6 +42,33 @@ class UserDefinedEquations(NonSimulationEquations, Discretisation, Solution):
         cls._place += [place]
         return
 
+    @property
+    def full_swap(cls):
+        return cls._full_swap
+
+    @full_swap.setter
+    def full_swap(cls, full_swap):
+        cls._full_swap = full_swap
+        return
+
+    def merge_kernels(cls, kernel_list, no_derivatives, block):
+        """ Merges the multiple kernels provided by discretize into a single evaluation to evaluate the entire UDF in a single kernel.
+        Currently assumes the grid range on all computations is the same. May need to change later."""
+        UDF_equations = cls.equations
+        derivative_evaluations = []
+        for ker in kernel_list:
+            for eqn in ker.equations:
+                derivative_evaluations.append(eqn)
+        
+        merged_kernel = Kernel(block, computation_name=cls.computation_name)
+        # Derivative evaluations
+        merged_kernel.add_equation(derivative_evaluations)
+        # Equations that depend on these derivative evaluations
+        merged_kernel.add_equation(no_derivatives)
+        merged_kernel.ranges = block.ranges[:]
+        return [merged_kernel]
+
+
     def spatial_discretisation(cls, block):
         """ Applies the spatial discretisation of the equations by calling the discretisation of each spatial scheme provided on the block
 
@@ -56,18 +86,28 @@ class UserDefinedEquations(NonSimulationEquations, Discretisation, Solution):
             if schemes[sc].schemetype == "Spatial":
                 spatialschemes += [sc]
         # Perform spatial Discretisation if any in constituent relations evaluation
+        # Input equations are saved here, before discretisation
         equations = cls.equations
 
         UDF_derivative_kernels = []
-        evaluations = []
+        evaluations = [] # these evaluations are never used here
+        no_derivatives = []
 
         for eq in flatten(equations):
-            cls.equations = [eq]
-            for sc in spatialschemes:
-                evaluations.append(schemes[sc].discretise(cls, block))
+            if isinstance(eq, GroupedPiecewise):
+                pass
+            elif len(eq.rhs.atoms(CentralDerivative)) == 0: # checking for equations requiring derivative evaluation
+                no_derivatives += [eq]
+            else: # Need to compute the derivative
+                cls.equations = [eq]
+            # for sc in spatialschemes:
+            #     # Constituent relations are returned
+            evaluations.append(schemes[str(CentralDerivative)].discretise(cls, block)) # only Central should be used
             UDF_derivative_kernels.append(cls.Kernels[:])
-
+            # Reset discretized Kernels and equations for this equation
             cls.Kernels = []
+            cls.equations = []
+        # Original input equations are restored here
         cls.equations = equations
 
         # No discretisation required
@@ -86,8 +126,15 @@ class UserDefinedEquations(NonSimulationEquations, Discretisation, Solution):
         else:
             cls.Kernels += flatten(UDF_derivative_kernels)
 
+        if cls.kernel_merge: # merge kernels to evaluate all within one kernel
+            cls.Kernels = cls.merge_kernels(cls.Kernels, no_derivatives, block)
+
         # Process the kernels to update parameters on the block
         cls.process_kernels(block)
+        # Apply a custom grid range if defined
+        if cls.custom_grid_range is not None:
+            for ker in cls.Kernels:
+                ker.ranges = cls.custom_grid_range
         return
 
     def process_kernels(cls, block):

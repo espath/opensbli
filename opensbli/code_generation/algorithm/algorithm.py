@@ -6,12 +6,12 @@
    should be a codeprinter class
 """
 
-from sympy import flatten, Equality, Or
+from sympy import flatten, Equality, Or, pprint
 from opensbli.code_generation.latex import LatexWriter
 from opensbli.core.opensbliobjects import Constant, DataSetBase
 from opensbli.code_generation.algorithm.common import BeforeSimulationStarts, AfterSimulationEnds, InTheSimulation
 import copy
-
+from opensbli.core.datatypes import SimulationDataType
 
 class Loop(object):
     """ Base object representing loops in an algorithm
@@ -79,8 +79,7 @@ class MainPrg(Loop):
 
 
 class Condition(object):
-    """ Used for setting the conditions in the program, example
-    """
+    """ Used for setting the conditions in the program, example."""
 
     def __init__(self, condition):
         self.condition = condition
@@ -113,18 +112,18 @@ class Condition(object):
 
     @property
     def opsc_code(self):
-        """ Writes the OPS C version of the code by looping over the components
-        """
+        """ Writes the OPS C version of the code by looping over the components."""
         code = self.opsc_condition_start
         for c in self.components:
             code += c.opsc_code
+        if code[-1][-1] == '\n':
+            code[-1] = code[-1].rstrip()
         code += self.opsc_condition_end
         return code
 
     @property
     def opsc_condition_start(self):
-        """ The starting loop for a if condition in OPS C
-        """
+        """ The starting loop for a if condition in OPS C."""
         from opensbli.code_generation.opsc import OPSCCodePrinter
         code = OPSCCodePrinter().doprint(self.condition)
         code = 'if (' + code + '){'
@@ -132,9 +131,8 @@ class Condition(object):
 
     @property
     def opsc_condition_end(self):
-        """ The loop end for an if condition in OPS C
-        """
-        return ['}']
+        """ The loop end for an if condition in OPS C."""
+        return ['}\n']
 
 
 class DoLoop(Loop):
@@ -170,8 +168,7 @@ class DoLoop(Loop):
 
     @property
     def opsc_code(self):
-        """ Writes the OPS  version of the Do loop with the components
-        """
+        """ Writes the OPS  version of the Do loop with the components."""
         code = []
         code += [self.opsc_start]
         for c in self.components:
@@ -181,21 +178,23 @@ class DoLoop(Loop):
 
     @property
     def opsc_start(self):
-        """ Do loop in OPSC is a for loop, and the starting of the for loop is written by this function
-        """
-        return "for(int %s=%s; %s<=%s; %s++)\n{" % (self.loop, str(self.loop.lower), self.loop, str(self.loop.upper), self.loop)
+        """ Do loop in OPSC is a for loop, and the starting of the for loop is written by this function."""
+        if self.loop.restart is not None:
+            out = "for(%s=%s; %s<=%s+%s; %s++)\n{\n" % (self.loop, str(self.loop.restart), self.loop, str(self.loop.restart), str(self.loop.upper), self.loop)
+            out += "simulation_time = tstart + dt*((iter - start_iter)+1);\n" # keep track of the simulation time on the outer loop
+            return out
+        else:
+            return "for(%s=%s; %s<=%s; %s++)\n{" % (self.loop, str(self.loop.lower), self.loop, str(self.loop.upper), self.loop)
 
     @property
     def opsc_end(self):
-        """ Ending of a for loop in OPSC
-        """
+        """ Ending of a for loop in OPSC."""
         return "}"
 
 
 class DefDecs(object):
     """ Definitions and declarations in a program. This write latex and OPS C code printing functions are
-    not used currently but these will be added in the future releases
-    """
+    not used currently but these will be added in the future releases."""
 
     def __init__(self):
         self.components = []
@@ -300,30 +299,29 @@ class Timers(object):
 
     @property
     def opsc_start_timer(self):
-        """ OPSC code for the starting the timers, this is called from Timers.opsc_code()
-        """
+        """ OPSC code for the starting the timers, this is called from Timers.opsc_code(). """
         start = self._start_variables
-        timer_start = ["double %s, %s;" % (start[0], start[1])] + ["ops_timers(&%s, &%s);" % (start[0], start[1])]
+        end = self._end_variables
+        timer_start = ["// Initialize loop timers"]
+        timer_start += ["double %s, %s, %s, %s;" % (start[0], start[1], end[0], end[1])] + ["ops_timers(&%s, &%s);" % (start[0], start[1])]
         return timer_start
 
     @property
     def opsc_end_timer(self):
-        """ OPSC code for the ending the timers, this is called from Timers.opsc_code()
-        """
+        """ OPSC code for the ending the timers, this is called from Timers.opsc_code(). """
         end = self._end_variables
         code = []
-        code += ["double %s, %s;" % (end[0], end[1])] + ["ops_timers(&%s, &%s);" % (end[0], end[1])]
+        code += ["ops_timers(&%s, &%s);" % (end[0], end[1])]
         code += self.timing_result_opsc
         return code
 
     @property
     def timing_result_opsc(self):
-        """ Generates the code for printing the timing results in OPSC
-        """
+        """ Generates the code for printing the timing results in OPSC. """
         code = []
         code += ["ops_printf(\"\\nTimings are:\\n\");"]
         code += ["ops_printf(\"-----------------------------------------\\n\");"]
-        code += ["ops_printf(\"Total Wall time %%lf\\n\",%s-%s);" % (self._end_variables[1], self._start_variables[1])]
+        code += ["ops_printf(\"Total Wall time %%lf\\n\",%s-%s);\n" % (self._end_variables[1], self._start_variables[1])]
         return code
 
 
@@ -338,27 +336,31 @@ class TraditionalAlgorithmRK(object):
     which gives the user control to perform modifications for extra functionality such as
     adding post processing."""
 
-    def __init__(self, blocks, simulation_monitor=None, dtype=None):
+    def __init__(self, blocks, simulation_monitor=None):
         from opensbli.core.block import SimulationBlock as SB
         self.block_descriptions = []
         self.ntimers = 0
         self.simulation_monitor = simulation_monitor
+        # For restart flag in the definitions to restart the time-advance arrays
+        self.time_advance_arrays = []
+        from opensbli.equation_types.opensbliequations import SimulationEquations
+        for b in flatten([blocks]):
+            for eqn_class in b.list_of_equation_classes:
+                if isinstance(eqn_class, SimulationEquations):
+                    self.time_advance_arrays += flatten(eqn_class.time_advance_arrays)
         if isinstance(blocks, SB):
             self.MultiBlock = False
             blocks = [blocks]
         else:
             self.MultiBlock = True
             raise NotImplementedError("")
-        if dtype:
-            self.dtype = dtype
-        else:
-            # TODO V2 import Double datatype
-            self.dtype = "double"
+        self.blocks = blocks
+        self.datatype = SimulationDataType.dtype()
         self.check_temporal_scheme(blocks)
         self.prg = MainPrg()
         self.add_block_names(blocks)
         defdecs = self.get_definitions_declarations(blocks)
-        self.defnitionsdeclarations = defdecs
+        self.definitions_and_declarations = defdecs
         self.generate_solution(blocks)
         return
 
@@ -375,10 +377,11 @@ class TraditionalAlgorithmRK(object):
     def get_definitions_declarations(self, blocks):
         defdecs = DefDecs()
         for b in blocks:
-            defdecs.add_components(list(b.constants.values()))
+            # defdecs.add_components(list(b.constants.values()))
             defdecs.add_components(list(b.Rational_constants.values()))
             defdecs.add_components(list(b.block_datasets.values()))
             defdecs.add_components(list(b.block_stencils.values()))
+            defdecs.add_components(list(b.block_reductions.values()))
         return defdecs
 
     def generate_solution(self, blocks):
@@ -395,7 +398,10 @@ class TraditionalAlgorithmRK(object):
             b = blocks[0]
             bc_kernels, inner_temporal_advance_kernels, temporal_start, temporal_end, spatial_kernels, = [], [], [], [], []
             before_time, after_time, in_time, non_simulation_eqs = [], [], [], []
-
+            sc = b.get_temporal_schemes[0]
+            # Iteration counter for any conditional expressions
+            temporal_iteration = sc.temporal_iteration
+            temporal_iteration.main_file = True # do not apply in-kernel formatting on the code-writer
             # Raise an error if there is more than one temporal scheme
             if len(b.get_temporal_schemes) > 1:
                 raise ValueError("Found more than one temporal scheme on the block")
@@ -415,24 +421,34 @@ class TraditionalAlgorithmRK(object):
                         if not isinstance(key, ConstituentRelations):
                             print("NOT classified", type(key))
                             raise ValueError("Equations class can not be classified: %s" % key)
+            # Place any non-simulation equation classes (statistics, filters, metric evaluations, ...)
             for key in sorted(non_simulation_eqs, key=lambda x: x.order):
                 for place in key.algorithm_place:
                     if isinstance(place, BeforeSimulationStarts):
-                        before_time += key.Kernels
+                        if place.start_condition is not None:
+                            cond = Condition(place.start_condition)
+                            cond.add_components(key.Kernels)
+                            before_time += [cond]
+                        else:
+                            before_time += key.Kernels
                     elif isinstance(place, AfterSimulationEnds):
                         after_time += key.Kernels
                     else:
-                        if place.frequency:
-                            raise NotImplementedError("In Non-simulation equations")
-                        else:
+                        if place.frequency: # iteration frequency condition
+                            t = Equality((temporal_iteration + 1) % key._place[0].frequency, 0)
+                            cond = Condition(t)
+                            cond.add_components(key.Kernels)
+                            in_time += [cond]
+                        elif place.execution_condition is not None:  # boolean condition
+                            cond = Condition(place.execution_condition)
+                            cond.add_components(key.Kernels)
+                            in_time += [cond]
+                        else: # no condition, always evaluate
                             in_time += key.Kernels
 
-            sc = b.get_temporal_schemes[0]
-            # Add optional simulation point monitoring
-            temporal_iteration = sc.temporal_iteration
+            # Add optional simulation monitors
             if self.simulation_monitor is not None:
                 t = (Or(Equality((temporal_iteration + 1) % self.simulation_monitor.frequency, 0), Equality(temporal_iteration, 0)))
-                # t = Equality((temporal_iteration + 1) % self.simulation_monitor.frequency, 0)
                 cond = Condition(t)
                 cond.add_components(self.simulation_monitor)
                 in_time += [cond]
@@ -454,7 +470,10 @@ class TraditionalAlgorithmRK(object):
                         io_copy.dynamic_fname = False
                         after_time += [io_copy]
                     elif isinstance(place, InTheSimulation):
-                        t = (Equality((temporal_iteration + 1) % place.frequency, 0, evaluate=False))
+                        if place.initial_condition:
+                            t = Or(Equality((temporal_iteration + 1) % place.frequency, 0), Equality(temporal_iteration, 0))
+                        else:
+                            t = (Equality((temporal_iteration + 1) % place.frequency, 0, evaluate=False))
                         cond = Condition(t)
                         io_copy = copy.deepcopy(io)
                         io_copy.dynamic_fname = True

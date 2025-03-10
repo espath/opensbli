@@ -1,8 +1,12 @@
+from sympy import Float
 
 class SimulationDataType(object):
     @staticmethod
     def set_datatype(types):
-        SimulationDataType.dtype = types
+        if types == Float:
+            raise ValueError("Incorrect Simulation DataType. Please use FloatC, not Float.")
+        else:
+            SimulationDataType.dtype = types
 
     @staticmethod
     def dtype():
@@ -28,6 +32,11 @@ class FloatC(DataType):
     @staticmethod
     def opsc():
         return "float"
+
+class Half(DataType):
+    @staticmethod
+    def opsc():
+        return "half"
 
 
 class UserDefined(DataType):

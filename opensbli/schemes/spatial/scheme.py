@@ -5,13 +5,13 @@
 """
 
 from sympy.calculus import finite_diff_weights
-from sympy import postorder_traversal, Function, flatten, S, factor
+from sympy import postorder_traversal, Function, flatten, S, factor, pprint
 from sympy.core import Add, Mul
 from opensbli.core.opensbliobjects import ConstantObject, DataSet, CoordinateObject
 from opensbli.core.opensblifunctions import CentralDerivative
 from opensbli.equation_types.opensbliequations import OpenSBLIEq, SimulationEquations
 from opensbli.core.kernel import Kernel
-
+import re
 
 class Scheme(object):
 
@@ -26,6 +26,7 @@ class Scheme(object):
 
         self.name = name
         self.order = order
+        self.algorithm_order = 0
         return
 
 
@@ -76,6 +77,7 @@ class Central(Scheme):
         self.points = list(i for i in range(int(-order/2), int(order/2+1)))
         self.required_constituent_relations = {}
         self.halotype = CentralHalos(order)
+        self.algorithm_order = 10000 # Place central evaluations last
         return
 
     def _generate_weights(self, direction, order, block):
@@ -83,21 +85,6 @@ class Central(Scheme):
         self.diffpoints = [i for i in self.points]
         weights = finite_diff_weights(order, self.diffpoints, 0)
         return weights[order][-1]
-
-    # def add_required_database(self, dbases):
-    #     # TODO V2: is it used??
-    #     self.required_database += flatten(list(dbases))
-    #     return
-
-    # @property
-    # def scheme_required_databases(self):
-    #     # TODO V2: is it used??
-    #     return set(self.required_database)
-
-    # def update_works(self, to_descritse, block):
-    #     # V2: Delete this?
-
-    #     return
 
     def set_halos(self, block):
         """Sets the halos of the scheme to the block, Max of the halos of the block are used for setting the range of
@@ -288,7 +275,7 @@ class Central(Scheme):
         residue_kernel = Kernel(block)
         for no, array in enumerate(residual_arrays):
             # First time writing to the residual arrays
-            if residual_type is 'Convective':
+            if residual_type == 'Convective':
                 expr = OpenSBLIEq(array, discretised_eq[no])
             else:
                 expr = OpenSBLIEq(array, array+discretised_eq[no])
@@ -297,20 +284,25 @@ class Central(Scheme):
         return residue_kernel
 
     def general_discretisation(self, equations, block, name=None):
-        """
-        This discretises the central derivatives, without any special treatment of grouping them
-        """
-        discretized_equations = flatten(equations)[:]
+        """ This discretises the central derivatives, without any special treatment of grouping them. """
+        input_equations = flatten(equations)[:]
         cds = self.get_local_function(flatten(equations))
+        # Remove LHS work arrays if needed - they have been computed in previous kernels
+        for eqn in input_equations[:]:
+            if isinstance(eqn, OpenSBLIEq):
+                if isinstance(eqn.lhs, DataSet):
+                    if 'wk' in str(eqn.lhs):
+                        lhs_string = re.split(r'(\d+)', str(eqn.lhs))[0]
+                        if lhs_string == 'wk':
+                            input_equations.remove(eqn)
         if cds:
             local_kernels = {}
-            if block.store_derivatives:
-                for der in cds:
-                    der.update_work(block)
-                    ker = Kernel(block)
-                    if name:
-                        ker.set_computation_name("%s %s " % (name, der))
-                    local_kernels[der] = ker  # Reverted back
+            for der in cds:
+                der.update_work(block)
+                ker = Kernel(block)
+                if name:
+                    ker.set_computation_name("%s %s " % (name, der))
+                local_kernels[der] = ker  # Reverted back
             # create a dictionary of works and kernels
             work_arry_subs = {}
             for der in cds:
@@ -320,9 +312,9 @@ class Central(Scheme):
                 work_arry_subs[expr] = der.work
                 local_kernels[der].add_equation(expr_discretised)
                 local_kernels[der].set_grid_range(block)
-            for no, c in enumerate(discretized_equations):
-                discretized_equations[no] = discretized_equations[no].subs(work_arry_subs)
-            return local_kernels, discretized_equations
+            for no, c in enumerate(input_equations):
+                input_equations[no] = input_equations[no].subs(work_arry_subs)
+            return local_kernels, input_equations
         else:
             return None, None
 

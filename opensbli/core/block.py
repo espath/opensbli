@@ -6,10 +6,10 @@
 from opensbli.core.grid import Grid
 from sympy import Equality
 from opensbli.core.boundary_conditions.bc_core import BoundaryConditionTypes
-from opensbli.core.opensbliobjects import ConstantObject, DataObject, DataSetBase, GroupedPiecewise
+from opensbli.core.opensbliobjects import ConstantObject, DataObject, DataSetBase, GroupedPiecewise, ReductionVariable
 from opensbli.equation_types.opensbliequations import OpenSBLIEq, ConstituentRelations
 from opensbli.equation_types.metric import MetricsEquation
-from sympy import flatten, eye
+from sympy import flatten, eye, pprint, Integer
 _known_equation_types = (GroupedPiecewise, OpenSBLIEq)
 from opensbli.schemes.spatial.scheme import CentralHalos_defdec
 from opensbli.utilities.user_defined_kernels import UserDefinedEquations
@@ -47,10 +47,42 @@ class KernelCounter():
         self.kernel_counter = self.stored_counter
         return
 
+class ReductionCounter():
+    """A Counter for the reductions, this stores the current reduction number for a block,
+    and is used to name the reductions."""
 
-class SimulationBlock(Grid, KernelCounter, BoundaryConditionTypes):
+    def __init__(self):
+        self.reduction_counter = 0
+        self.stored_counter = 0
+
+    @property
+    def reset_reduction_counter(self):
+        """Resets the kernel counter to zero."""
+        self.reduction_counter = 0
+        return
+
+    @property
+    def increase_reduction_counter(self):
+        """Increases the kernel counter by 1."""
+        self.reduction_counter = self.reduction_counter + 1
+        return
+
+    @property
+    def store_reduction_counter(self):
+        """Stores the current values to a variables."""
+        self.stored_counter = self.reduction_counter
+        return
+
+    @property
+    def reset_kernel_to_stored(self):
+        """Updates the kernel counter to the previously stored value."""
+        self.reduction_counter = self.stored_counter
+        return
+
+
+class SimulationBlock(Grid, KernelCounter, ReductionCounter, BoundaryConditionTypes):
     """ A SimulationBlock represents represents the grid on which the equations, boundary conditions etc are set to be solved."""
-    def __init__(self, ndim, block_number=None):
+    def __init__(self, ndim, block_number=None, conservative=True):
         if block_number:
             self.blocknumber = block_number
         else:
@@ -58,19 +90,26 @@ class SimulationBlock(Grid, KernelCounter, BoundaryConditionTypes):
         self.ndim = ndim
         # Instantiate the kernel counter
         KernelCounter.__init__(self)
+        # Instantiate the reduction counter
+        ReductionCounter.__init__(self)
         # Instantiate grid class
         Grid.__init__(self)
         # Empty sets for the boundary conditions. The halo type for the chosen discretisation schemes
         # will be added to these sets depending on the derivatives in the governing equations.
         self.boundary_halos = [[set(), set()] for d in range(self.ndim)]
         # Place holders to store various block parameters
+        self.MB = False
         self.block_datasets = {}
-        self.constants = {}
+        self.block_kernel_names = []
+        # self.constants = {}
         self.Rational_constants = {}
         self.block_stencils = {}
+        self.block_reductions = {}
         self.InputOutput = []
         self.list_of_equation_classes = []
         self.shock_filter = False
+        self.direction_labels = ['x', 'y', 'z']
+        self.conservative = conservative # Conservative form of LHS
         return
 
     @property
@@ -90,7 +129,25 @@ class SimulationBlock(Grid, KernelCounter, BoundaryConditionTypes):
 
     def set_block_boundaries(self, bclist):
         """Sets the boundary conditions for the block."""
+        self.check_boundaries(bclist)
         self.set_boundary_types(bclist, self)
+        return
+
+    def check_boundaries(self, bclist):
+        """ Check there are the correct number of boundary conditions per direction. """
+        x, y, z = 0, 0, 0
+        for bc in flatten(bclist):
+            if bc.direction == 0:
+                x += 1
+            elif bc.direction == 1:
+                y += 1
+            elif bc.direction == 2:
+                z += 1
+        assert x == 2
+        if self.ndim > 1:
+            assert y == 2
+        if self.ndim > 2:
+            assert z == 2
         return
 
     def set_block_boundary_halos(self, direction, side, types):
@@ -111,10 +168,14 @@ class SimulationBlock(Grid, KernelCounter, BoundaryConditionTypes):
             if isinstance(eq, _known_equation_types):
                 store_equations[no] = eq.convert_to_datasets(self)
                 consts = consts.union(eq.atoms(ConstantObject))
+                if len(eq.atoms(ReductionVariable)) > 0:
+                    store_equations[no] = store_equations[no].convert_reduction_vars(self)
             elif isinstance(eq, Equality):
                 new_eq = OpenSBLIEq(eq.lhs, eq.rhs)
                 consts = consts.union(new_eq.atoms(ConstantObject))
                 store_equations[no] = new_eq.convert_to_datasets(self)
+                if len(eq.atoms(ReductionVariable)) > 0:
+                    store_equations[no] = store_equations[no].convert_reduction_vars(self)
             elif isinstance(eq, DataObject):
                 store_equations[no] = self.location_dataset(str(eq))
             else:  # Integers and Floats from Eigensystem entering here
@@ -138,10 +199,10 @@ class SimulationBlock(Grid, KernelCounter, BoundaryConditionTypes):
     def copy_block_attributes(self, otherclass):
         """Set the attributes blocknumber, name and number of dimensions of the
         block on the other block."""
-        # TODO V2, why the name for blocknumber is different, we should be consistent
         otherclass.block_number = self.blocknumber
         otherclass.ndim = self.ndim
         otherclass.block_name = self.blockname
+        otherclass.coordinate_arrays_to_restart = self.coordinate_arrays_to_restart
         return
 
     @property
@@ -155,6 +216,9 @@ class SimulationBlock(Grid, KernelCounter, BoundaryConditionTypes):
                 known_dsets = known_dsets.union(eq.evaluated_datasets)
         for io in self.InputOutput:
             known_dsets = known_dsets.union(io.evaluated_datasets)
+        # Add the metrics
+        metrics = set([x.base for x in self.fd_metrics if not isinstance(x, Integer)])
+        known_dsets = known_dsets.union(metrics)
         return known_dsets
 
     def discretise(self):
@@ -173,9 +237,16 @@ class SimulationBlock(Grid, KernelCounter, BoundaryConditionTypes):
             for eq in self.list_of_equation_classes:
                 self.discretisation_schemes[t.name].discretise(eq, self)
 
-        # Update the data sets that are to be read from HDF5
+        # Warn if no I/O options were set for the simulation
+        IO_write = [x for x in self.InputOutput if x.kwargs['iotype'] == 'write']
+        if len(IO_write) == 0:
+            print('\33[91m' + "WARNING: No HDF5 output option was specified on block {}. Please set an io_hdf5 class instance on this block.".format(self.blocknumber) + '\033[0m')
+        # Update the data sets that are to be read/write from HDF5
+        for dset in self.block_datasets.values():
+            dset.write_to_hdf5 = False
         for io in self.InputOutput:
             io.set_read_from_hdf5_arrays(self)
+            io.set_write_to_hdf5_arrays(self)
         return
 
     def create_datasetbase(self, name):

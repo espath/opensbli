@@ -43,18 +43,23 @@ class Initialise_Katzer(GridBasedInitialisation):
         self.initial = self.generate_initial_condition()
         # Add polynomial equations to initialise the solution
         self.equations += self.eqns
+        # Convert inputs to DataSets
         self.equations = block.dataobjects_to_datasets_on_block(self.equations)
-        kernel1 = Kernel(block, computation_name="Grid_based_initialisation%d" % self.order)
-        kernel1.set_grid_range(block)
-        schemes = block.discretisation_schemes
+        # Ensure coordinate arrays are also restarted when required
+        self.check_coordinate_evaluation(block)
+        # Create the Katzer kernel
+        from opensbli.core.kernel import Kernel
+        katzer_kernel = Kernel(block, computation_name="Similiarity solution laminar boundary-layer initialisation%d" % self.order)
+        katzer_kernel.set_grid_range(block)
+        # Set halo range
+        from opensbli.schemes.spatial.scheme import CentralHalos_defdec
         for d in range(block.ndim):
-            for sc in schemes:
-                if schemes[sc].schemetype == "Spatial":
-                    kernel1.set_halo_range(d, 0, schemes[sc].halotype)
-                    kernel1.set_halo_range(d, 1, schemes[sc].halotype)
-        kernel1.add_equation(self.equations)
-        kernel1.update_block_datasets(block)
-        self.Kernels = [kernel1]
+            # Initialize all five halos
+            katzer_kernel.set_halo_range(d, 0, CentralHalos_defdec())
+            katzer_kernel.set_halo_range(d, 1, CentralHalos_defdec())
+        katzer_kernel.add_equation(self.equations)
+        katzer_kernel.update_block_datasets(block)
+        self.Kernels = [katzer_kernel]
         return
 
     def generate_initial_condition(self):
