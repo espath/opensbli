@@ -33,7 +33,7 @@
     Copy CreateOpenSBLIEnv.sh into a directory, make it executable and run, for example, to create an environment including Python3/2, OPS.
 
     ```bash
-    wget -c https://raw.githubusercontent.com/opensbli/environment_and_run_scripts/refs/heads/main/CreateOpenSBLIEnv.sh
+    wget -c https://raw.githubusercontent.com/opensbli/opensbli/refs/heads/version3_cpc/environment_and_run_scripts/CreateOpenSBLIEnv.sh
     chmod a+x CreateOpenSBLIEnv.sh
     ```
 
