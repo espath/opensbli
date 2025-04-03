@@ -57,13 +57,19 @@ The following dependencies are required for generating a code and running a simu
 
 ## Installation
 
+For a traditional makefile-based installation see the instructions in the user manual (under the docs directory of this branch).
+
+For a simplified installation script (suitable for novice users) that avoids detailed path specifications and uses Cmake for installation and OPS translation, see the readme_script_based_installation.md file in this branch.
+
+<!--
 ### Development branch
 
-Add OpenSBLI to your `PYTHONPATH` environment variable using
+ Add OpenSBLI to your `PYTHONPATH` environment variable using 
 
 ```
 export PYTHONPATH=$PYTHONPATH:/path/to/OpenSBLI/base/directory
 ```
+-->
 
 ## Recent applications of OpenSBLI
 1. DJ Lusher, A Sansica, A Hashimoto. *Implicit large eddy simulations of three-dimensional turbulent transonic buffet on wide-span infinite wings*. **Journal of Fluid Mechanics (2025)**.
