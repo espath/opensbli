@@ -97,12 +97,19 @@ mkdir -p $Dir
 cd $Dir ## needed by normal version
 ## Download the scripts
 
-# wget -c https://github.com/jpmeng/aosh/archive/refs/heads/main.zip
-wget -c https://github.com/opensbli/environment_and_run_scripts/archive/refs/heads/main.zip
-unzip main.zip
-rm main.zip
-mv environment_and_run_scripts-main/*  .
-rm -r -f environment_and_run_scripts-main
+# # wget -c https://github.com/jpmeng/aosh/archive/refs/heads/main.zip
+# wget -c https://github.com/opensbli/environment_and_run_scripts/archive/refs/heads/main.zip
+# unzip main.zip
+# rm main.zip
+# mv environment_and_run_scripts-main/*  .
+# rm -r -f environment_and_run_scripts-main
+
+wget https://github.com/opensbli/opensbli/archive/refs/heads/version3_cpc.zip
+unzip version3_cpc.zip
+chmod +x opensbli-version3_cpc/environment_and_run_scripts/*
+mv opensbli-version3_cpc/environment_and_run_scripts/* .
+rm -rf opensbli-version3_cpc version3_cpc.zip
+
 # Set the default machine in CompileC.sh changed from "Ubuntu" to "None"
 sed -i "s/Machine=\"None\"/Machine=\"${Machine}\"/g" CompileC.sh
 ## Install local HDF5 if needed
