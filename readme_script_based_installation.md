@@ -58,7 +58,19 @@
     ```bash
     ./CreateOpenSBLIEnv.sh -d ~/tmp/OpenSBLIEnv -m Ubuntu
     ```
-  - Step 2 Generate C/C++ codes for an application
+- Step 2 Testing if OpenSBLI/OPS environment is installed successfully
+
+    Before moving to the next step of building, compiling and running a specific app in the OpenSBLI/apps directory, one can check if the code generation and compilation steps are working successfully or not. For this, a file named "**RunTests.sh**" is available at the main installation/environment directory, e.g., in this case, "/home/username/tmp/OpenSBLIEnv". So, you need to go to the tests folder and run the following "**RunTests.sh**" script using,
+    ```bash
+    # assuming under the environment directory
+    cd /home/username/tmp/OpenSBLIEnv/OpenSBLI/tests/
+    ../../RunTests.sh -p
+    ```
+    "**../../RunTests.sh -p**" command, along with **-p** flag, will run a few selected test cases and perform all stages including generate, compile, run and then check if the run produced some sensible numbers for the particular cases. If the tests were successful, you will get messages like, "Passed all tests successfully".
+
+
+    
+  - Step 3 Generate C/C++ codes for an application
 
     By default, Generate.sh will set the directory where it is to be the environment directory. It will activate the Python environment in the environment and translate the specified OpenSBLI Python source code.
 
@@ -67,7 +79,7 @@
     cd OpenSBLI/apps/transitional_SBLI/
     ../../../Generate.sh transitional_SBLI.py
     ```
-  - Step 3 Compile the C/C++ code
+  - Step 4 Compile the C/C++ code
 
     When creating the environment at Step 1, the default machine in CompileC.sh will be set to the intended one. Also, CompileC.sh will set the directory where it is to be the environment directory and use the local HDF5 at the first instance.
 
@@ -76,7 +88,7 @@
     cd OpenSBLI/apps/transitional_SBLI/
     ../../../CompileC.sh
     ```
-  - Step 4 Optional setup
+  - Step 5 Optional setup
 
     After successfully creating the OpenSBLI/OPS software environment after compiling and installing everything, the script will indicate that we can set up a few more environment variables by sourcing the script **OpenSBLIEnvVar** under the specified directory (using, e.g. **source ~/tmp/OpenSBLIEnv**). It will set up the $PATH so that we can run **Generate.sh** and **CompileC.sh** without using "../../../". Also, one can call **source $PYTHON** to enter into the provided Python environment for postprocessing.
 
