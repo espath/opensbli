@@ -58,7 +58,7 @@
     ```bash
     ./CreateOpenSBLIEnv.sh -d ~/tmp/OpenSBLIEnv -m Ubuntu
     ```
-- Step 2 Testing if OpenSBLI/OPS environment is installed successfully
+  - Step 2 Testing if OpenSBLI/OPS environment is installed successfully
 
     Before moving to the next step of building, compiling and running a specific app in the OpenSBLI/apps directory, one can check if the code generation and compilation steps are working successfully or not. For this, a file named "**RunTests.sh**" is available at the main installation/environment directory, e.g., in this case, "/home/username/tmp/OpenSBLIEnv". So, you need to go to the tests folder and run the following "**RunTests.sh**" script using,
     ```bash
