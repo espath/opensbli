@@ -53,5 +53,5 @@ python3 plot_compare_density_opensbli.py \
   --Ml "${ML_VALUE}" \
   --opensbli "${dual_file}" \
   --opensbli2 "${nsf_file}" \
-  --label2 'OpenSBLI NSF ($\mathrm{M}_\ell=0$)' \
+  --label2 'NSF ($\mathrm{M}_\ell=0$)' \
   --out "shock_compare_dual_nsf_exp_ma${ma_tag}_ml${ml_tag}.pdf"

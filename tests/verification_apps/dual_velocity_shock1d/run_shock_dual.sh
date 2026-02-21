@@ -9,12 +9,12 @@ source espath312/bin/activate
 source env_ops.sh
 cd "${THIS_DIR}"
 
-MA_VALUE="${MA_VALUE:-9.0}"
-ML_VALUE="${ML_VALUE:-1.3}"
+MA_VALUE="${MA_VALUE:-3.8}"
+ML_VALUE="${ML_VALUE:-0.4}"
 TVD_KAPPA_VALUE="${TVD_KAPPA_VALUE:-1.0}"
 TVD_DELTA_VALUE="${TVD_DELTA_VALUE:-0.5}"
 TVD_EPS_VALUE="${TVD_EPS_VALUE:-1e-8}"
-SHOCK_FILTER="${SHOCK_FILTER:-none}"  # tvd | weno | none
+SHOCK_FILTER="${SHOCK_FILTER:-tvd}"  # tvd | weno | none
 NP0_VALUE="${NP0_VALUE:-101}"
 DT_VALUE="${DT_VALUE:-1e-4}"
 T_END_VALUE="${T_END_VALUE:-25.0}"

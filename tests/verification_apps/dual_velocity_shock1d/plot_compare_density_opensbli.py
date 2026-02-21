@@ -98,7 +98,7 @@ def main():
     parser.add_argument("--Ml", default=None, help="Ml label for legend/title")
     parser.add_argument("--opensbli", default="build/opensbli_output.h5", help="OpenSBLI output h5 path")
     parser.add_argument("--opensbli2", default=None, help="Second OpenSBLI output h5 path (optional)")
-    parser.add_argument("--label2", default="OpenSBLI NSF ($\\mathrm{M}_\\ell=0$)", help="Legend label for --opensbli2")
+    parser.add_argument("--label2", default="NSF ($\\mathrm{M}_\\ell=0$)", help="Legend label for --opensbli2")
     parser.add_argument("--exp", default=None, help="Experimental data txt path")
     parser.add_argument("--exp-merge-eps", type=float, default=-1.0)
     parser.add_argument("--exp-bin-width", type=float, default=0.0)
@@ -142,9 +142,9 @@ def main():
 
     fig, ax = plt.subplots()
     if args.Ml is None:
-        label = "OpenSBLI Dual-velocity"
+        label = "Dual-velocity"
     else:
-        label = rf"OpenSBLI Dual-velocity ($\mathrm{{M}}_\ell={args.Ml}$)"
+        label = rf"Dual-velocity ($\mathrm{{M}}_\ell={args.Ml}$)"
     ax.plot(sim_x, sim_rho_n, linewidth=1.5, label=label)
     if sim2_x is not None:
         ax.plot(sim2_x, sim2_rho_n, linewidth=1.5, linestyle="--", label=args.label2)
