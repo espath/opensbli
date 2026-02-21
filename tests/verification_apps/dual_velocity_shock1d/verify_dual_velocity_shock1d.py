@@ -18,6 +18,17 @@ def _int_env(name, default):
     val = os.getenv(name)
     return default if val is None else int(val)
 
+def _bool_env(name, default):
+    val = os.getenv(name)
+    if val is None:
+        return default
+    v = val.strip().lower()
+    if v in ("1", "true", "yes", "on"):
+        return True
+    if v in ("0", "false", "no", "off"):
+        return False
+    raise ValueError(f"Invalid boolean for {name}: {val}")
+
 def _tag(v):
     return f"{v:g}".replace(".", "p")
 
@@ -42,8 +53,24 @@ NITER_VALUE = _int_env("NITER_VALUE", 500000)
 NP0_VALUE = _int_env("NP0_VALUE", 201)
 M1_VALUE = MA_VALUE
 DELTA_IC_VALUE = 1.0
-USE_WENO_FILTER = False
-USE_TVD_FILTER = True
+FILTER_METHOD = os.getenv("SHOCK_FILTER", "").strip().lower()
+if FILTER_METHOD:
+    if FILTER_METHOD == "tvd":
+        USE_TVD_FILTER = True
+        USE_WENO_FILTER = False
+    elif FILTER_METHOD == "weno":
+        USE_TVD_FILTER = False
+        USE_WENO_FILTER = True
+    elif FILTER_METHOD in ("none", "off"):
+        USE_TVD_FILTER = False
+        USE_WENO_FILTER = False
+    else:
+        raise ValueError(f"Invalid SHOCK_FILTER='{FILTER_METHOD}'. Use tvd|weno|none.")
+else:
+    # Backward-compatible env controls.
+    USE_WENO_FILTER = _bool_env("USE_WENO_FILTER", False)
+    USE_TVD_FILTER = _bool_env("USE_TVD_FILTER", True)
+
 CASE_DIR = os.path.dirname(os.path.abspath(__file__))
 OUTPUT_DIR = os.path.join(CASE_DIR, "outputs")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -167,6 +194,14 @@ elif USE_WENO_FILTER:
         optimize=False,
     )
     block.set_equations(WF.equation_classes)
+
+if USE_TVD_FILTER:
+    filter_name = "TVD"
+elif USE_WENO_FILTER:
+    filter_name = "WENO"
+else:
+    filter_name = "NONE"
+print(f"Shock filter selection: {filter_name}")
 
 block.set_equations([copy.deepcopy(constituent), copy.deepcopy(simulation_eq), initial])
 block.set_discretisation_schemes(schemes)

@@ -7,7 +7,12 @@
 # from sympy.core.compatibility import is_sequence
 from sympy.printing.precedence import precedence
 from sympy.utilities.iterables import is_sequence
-from sympy.printing.ccode import C99CodePrinter
+try:
+    # SymPy >=1.10
+    from sympy.printing.c import C99CodePrinter
+except ImportError:
+    # Older SymPy
+    from sympy.printing.ccode import C99CodePrinter
 # from sympy.printing.c import C99CodePrinter
 from sympy.core.relational import Equality
 from opensbli.core.opensbliobjects import ConstantObject, ConstantIndexed, Constant, DataSetBase, GroupedPiecewise, ReductionVariable, DataObject, DataSet, WhileLoop, ForLoop

@@ -6,3 +6,15 @@ opensbli/*.pyc
 bin/*.pyc
 tests/__pycache__
 *.pyc
+OpenSBLI.egg-info/
+build/
+espath312/
+env_ops.sh
+tests/verification_apps/sod_shock_tube/CMakeLists.txt
+tests/verification_apps/sod_shock_tube/constants.h
+tests/verification_apps/sod_shock_tube/defdec_data_set.h
+tests/verification_apps/sod_shock_tube/io.h
+tests/verification_apps/sod_shock_tube/opensbli.cpp
+tests/verification_apps/sod_shock_tube/opensbliblock00_kernels.h
+tests/verification_apps/sod_shock_tube/stencils.h
+tests/verification_apps/sod_shock_tube/build/

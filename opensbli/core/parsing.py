@@ -157,8 +157,14 @@ class Der(AppliedUndef, ParsingSchemes):
         substits = {}
         revertback = {}
         for fn in fns:
-            substits[fn] = fn(*fndeps)
-            revertback[fn(*fndeps)] = fn
+            # DataObject/EinsteinTerm instances are symbols and may not be callable
+            # in modern SymPy/Python. Promote to a temporary Function form first.
+            if callable(fn):
+                fn_call = fn(*fndeps)
+            else:
+                fn_call = Function(str(fn))(*fndeps)
+            substits[fn] = fn_call
+            revertback[fn_call] = fn
         expr = cls.args[0]
         expr = expr.subs(substits)
         pot = postorder_traversal(expr)
@@ -396,8 +402,7 @@ class EinsteinEquation(EinsteinStructure):
             constant_dictionary[con] = ConstantObject(con)
         # get all the functions form opensbli automatically
         local_dict = {}
-        from sympy.core.compatibility import exec_
-        exec_('from opensbli.core import *', local_dict)
+        exec('from opensbli.core import *', local_dict)
         local_dict.update({'coordinate': coordinate_symbol, 'time': 't'})
         local_dict.update(constant_dictionary)
         # Parse the equation.

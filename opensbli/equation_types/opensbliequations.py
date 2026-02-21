@@ -79,8 +79,11 @@ class Discretisation(object):
         else:
             fns += list(equation.atoms(Function))
         for fn in fns:
-            if not fn.is_homogeneous:
-                replacements[fn] = fn._sanitise
+            # Only OpenSBLI derivative-like functions expose the sanitise API.
+            # Raw SymPy functions (e.g. log) and parser placeholders should be skipped.
+            if hasattr(fn, "is_homogeneous") and hasattr(fn, "_sanitise"):
+                if not fn.is_homogeneous:
+                    replacements[fn] = fn._sanitise
         # modify the original equations
         if isinstance(equation, list):
             for no, eq in enumerate(equation):
@@ -210,8 +213,9 @@ class OpenSBLIEquation(Equality):
         # fns += list(cls.atoms(LocalDerivative))
         # MBCHANGE
         for fn in fns:
-            if not fn.is_homogeneous:
-                replacements[fn] = fn._sanitise
+            if hasattr(fn, "is_homogeneous") and hasattr(fn, "_sanitise"):
+                if not fn.is_homogeneous:
+                    replacements[fn] = fn._sanitise
         eq = cls
         return eq.xreplace(replacements)
 

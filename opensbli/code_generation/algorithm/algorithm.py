@@ -387,11 +387,15 @@ class TraditionalAlgorithmRK(object):
     def generate_solution(self, blocks):
         """ Generates the solution for the block
         """
+        import os
         from opensbli.equation_types.opensbliequations import SimulationEquations, NonSimulationEquations, ConstituentRelations
-        print("Generating algorithm and writing latex of it")
-        fname = 'algorithm.tex'
-        latex = LatexWriter()
-        latex.open(fname, "Algorithm for the equations")
+        write_latex = os.environ.get("OPENSBLI_WRITE_LATEX", "0") == "1"
+        print("Generating algorithm{}".format(" and writing latex of it" if write_latex else ""))
+        latex = None
+        if write_latex:
+            fname = 'algorithm.tex'
+            latex = LatexWriter()
+            latex.open(fname, "Algorithm for the equations")
         if self.MultiBlock:
             raise NotImplementedError("")
         else:
@@ -491,8 +495,10 @@ class TraditionalAlgorithmRK(object):
             self.prg.add_components(before_time)
             self.prg.add_components(timed_tloop)
             self.prg.add_components(after_time)
-            self.prg.write_latex(latex)
-        latex.close()
+            if latex is not None:
+                self.prg.write_latex(latex)
+        if latex is not None:
+            latex.close()
         return
 
     def add_timers(self, components):

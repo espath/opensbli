@@ -1,4 +1,4 @@
-from sympy import Symbol, flatten
+from sympy import Symbol, Integer, flatten
 # from sympy.core.compatibility import 
 from sympy.utilities.iterables import is_sequence
 from sympy.tensor import Idx, IndexedBase, Indexed
@@ -579,6 +579,7 @@ class Grididx(Indexed):
 
     def __new__(cls, label, number, **assumptions):
         name = str(label)
+        number = Integer(number)
         ret = Indexed.__new__(cls, name, number, **assumptions)
         ret.number = number
         ret._args = tuple([ret.base, ret.number])

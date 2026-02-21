@@ -37,7 +37,7 @@ class Plot(plotFunctions):
 
     def line_graphs(self, x, variables, names):
         for i, name in enumerate(names):
-            if name is not 'Exact':
+            if name != 'Exact':
                 plt.plot(x[i], variables[i], label=labels[i], color=colors[i], marker='o', linestyle='--', markevery=4)
             else:
                 plt.plot(x[i], variables[i], label=labels[i], color=colors[i])

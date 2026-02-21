@@ -324,17 +324,19 @@ class EigenSystem(object):
         return mat
 
     def generate_equations_from_matrices(self, lhs_matrix, rhs_matrix):
-        """ Forms a matrix containing Sympy equations at each element, given two input matrices.
+        """ Forms equations from two input matrices at matching positions.
 
         :arg Matrix lhs_matrix: The elements of lhs_matrix form the LHS of the output equations.
         :arg Matrix rhs_matrix: The elements alpha rhs_matrix form the RHS of the output equations.
-        returns: Matrix: equations: A matrix containing an Eq(lhs, rhs) pair in each element."""
+        returns: list: equations: A flat list containing Eq(lhs, rhs) entries or zeros."""
         if lhs_matrix.shape != rhs_matrix.shape:
             raise ValueError("Matrices should have the same dimension.")
-        equations = zeros(*lhs_matrix.shape)
+        equations = []
         for no, v in enumerate(lhs_matrix):
             if rhs_matrix[no] != 0:
-                equations[no] = OpenSBLIEq(v, factor(rhs_matrix[no]))
+                equations.append(OpenSBLIEq(v, factor(rhs_matrix[no])))
+            else:
+                equations.append(0)
         return equations
 
 

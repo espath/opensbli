@@ -3,9 +3,9 @@
    @contributors 
    @details
 """
-from sympy import flatten, simplify, symbols, factor, count_ops, pprint, Piecewise, Equality, simplify, Pow, Mul, collect, Rational, factor_terms, gcd_terms
+from sympy import flatten, simplify, symbols, factor, count_ops, pprint, Piecewise, Equality, simplify, Pow, Mul, collect, Rational, factor_terms, gcd_terms, Tuple
 from sympy.functions.elementary.piecewise import ExprCondPair
-from opensbli.core.opensbliobjects import ConstantObject, CoordinateObject, DataObject, DataSet, GroupedPiecewise, ConstantIndexed, Grididx
+from opensbli.core.opensbliobjects import ConstantObject, CoordinateObject, DataObject, DataSet, GroupedPiecewise, GroupedCondition, ConstantIndexed, Grididx
 from opensbli.core.grid import GridVariable
 from opensbli.core.opensblifunctions import CentralDerivative
 from opensbli.core.kernel import Kernel
@@ -13,6 +13,7 @@ from opensbli.schemes.spatial import Central
 from opensbli.equation_types.opensbliequations import OpenSBLIEq, SimulationEquations, ConstituentRelations
 from opensbli.equation_types.metric import MetricsEquation
 from collections import OrderedDict
+import re
 
 
 class StoreSome(Central):
@@ -241,8 +242,26 @@ class StoreSome(Central):
                 if len(eqn.rhs.atoms(Piecewise)) > 0:
                     # Find the direction
                     idx = list(eqn.rhs.atoms(Grididx))
-                    assert len(idx) == 1
-                    pw_dire = idx[0].args[-1]
+                    if len(idx) == 1:
+                        pw_dire = idx[0].args[-1]
+                    else:
+                        # Compatibility path: some SymPy versions don't preserve Grididx
+                        # in Piecewise conditions; infer direction from condition symbols.
+                        pw_dire = None
+                        for pw in eqn.rhs.atoms(Piecewise):
+                            for pair in pw.args:
+                                cond = pair.args[1]
+                                for sym in getattr(cond, "free_symbols", set()):
+                                    match = re.search(r"\[(\d+)\]$", str(sym))
+                                    if match:
+                                        pw_dire = int(match.group(1))
+                                        break
+                                if pw_dire is not None:
+                                    break
+                            if pw_dire is not None:
+                                break
+                        if pw_dire is None:
+                            continue
                     if pw_dire == direction:
                         for const in eqn.rhs.atoms(ConstantObject):
                             if not isinstance(const, ConstantIndexed):
@@ -280,14 +299,14 @@ class StoreSome(Central):
                             lhs, rhs, order = triple_value
                             factor = factor_dict[lhs]
                             evaluations.append(OpenSBLIEq(lhs, factor*rhs))
-                        conditions_to_evaluate.append(ExprCondPair(evaluations, Equality(cond.lhs, cond.rhs)))
+                        conditions_to_evaluate.append(GroupedCondition(Tuple(*evaluations), Equality(cond.lhs, cond.rhs)))
                 # Add the default condition
                 evaluations = []
                 for triple_value in conditionals_d1[True]:
                     lhs, rhs, order = triple_value
                     factor = factor_dict[lhs]
                     evaluations.append(OpenSBLIEq(lhs, factor*rhs))
-                conditions_to_evaluate.append(ExprCondPair(evaluations, True))
+                conditions_to_evaluate.append(GroupedCondition(Tuple(*evaluations), True))
                 # Create a GroupedPiecewise evalation object
                 grouped = GroupedPiecewise(*conditions_to_evaluate)
                 output_equations += [grouped]
@@ -302,14 +321,14 @@ class StoreSome(Central):
                             lhs, rhs, order = triple_value
                             factor = factor_dict[lhs]
                             evaluations.append(OpenSBLIEq(lhs, factor*rhs))
-                        conditions_to_evaluate.append(ExprCondPair(evaluations, Equality(cond.lhs, cond.rhs)))
+                        conditions_to_evaluate.append(GroupedCondition(Tuple(*evaluations), Equality(cond.lhs, cond.rhs)))
                 # Add the default condition
                 evaluations = []
                 for triple_value in conditionals_d2[True]:
                     lhs, rhs, order = triple_value
                     factor = factor_dict[lhs]
                     evaluations.append(OpenSBLIEq(lhs, factor*rhs))
-                conditions_to_evaluate.append(ExprCondPair(evaluations, True))
+                conditions_to_evaluate.append(GroupedCondition(Tuple(*evaluations), True))
                 # Create a GroupedPiecewise evalation object
                 grouped = GroupedPiecewise(*conditions_to_evaluate)
                 output_equations += [grouped]
