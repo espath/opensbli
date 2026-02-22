@@ -1,4 +1,4 @@
-from sympy import Symbol, Integer, flatten
+from sympy import Symbol, Integer, flatten, Function
 # from sympy.core.compatibility import 
 from sympy.utilities.iterables import is_sequence
 from sympy.tensor import Idx, IndexedBase, Indexed
@@ -120,6 +120,10 @@ class EinsteinTerm(Symbol):
             if self.get_indices():
                 val.direction = dictionary_indices[self.get_indices()[0]]
         return val
+
+    def __call__(self, *args):
+        """Represent Einstein terms as symbolic functions when parsing metric derivatives."""
+        return Function(str(self))(*args)
 
 
 class Constant(object):

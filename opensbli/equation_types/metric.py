@@ -257,7 +257,9 @@ class MetricsEquation(NonSimulationEquations, Discretisation, Solution):
         return
 
     def generate_sd_metrics_equations(cls):
-        eqns = [OpenSBLIEq(x, y) for x, y in zip(cls.SD_metrics, cls.SD_evaluations)]
+        lhs_terms = flatten(cls.SD_metrics[:])
+        rhs_terms = flatten(cls.SD_evaluations[:])
+        eqns = [OpenSBLIEq(x, y) for x, y in zip(lhs_terms, rhs_terms)]
         eqns = [e for e in eqns if isinstance(e, Equality)]
         eqns = [OpenSBLIEquation(eq.lhs, eq.rhs) for eq in eqns]
         cls.sdequations = eqns

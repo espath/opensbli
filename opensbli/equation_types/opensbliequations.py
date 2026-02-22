@@ -136,14 +136,19 @@ class Discretisation(object):
             for no, eq in enumerate(equation):
                 if isinstance(eq, GroupedPiecewise):
                     local += [eq]
+                elif not (hasattr(eq, "lhs") and hasattr(eq, "rhs")):
+                    # Some symbolic preprocessing paths can emit scalar placeholders.
+                    # Ignore non-equation entries when building equation classes.
+                    continue
                 else:
                     eq = OpenSBLIEquation(eq.lhs, eq.rhs)
                     eq.set_vector(no)
                     local += [eq]
             self.equations += [local]
         else:
-            equation = OpenSBLIEquation(equation.lhs, equation.rhs)
-            self.equations += [equation]
+            if hasattr(equation, "lhs") and hasattr(equation, "rhs"):
+                equation = OpenSBLIEquation(equation.lhs, equation.rhs)
+                self.equations += [equation]
         return
 
     @property

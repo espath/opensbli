@@ -507,7 +507,10 @@ class Characteristic(EigenSystem):
         gamma_minus_one.value = (ConstantObject('gama') - 1)
         ConstantsToDeclare.add_constant(gamma_minus_one)
         for i, eqn in enumerate(eqns):
-            eqns[i] = eqn.subs({gamma_minus_one.value: gamma_minus_one})
+            # Some paths can inject plain Python scalars into the temporary list.
+            # Only symbolic expressions/equations support .subs().
+            if hasattr(eqn, "subs"):
+                eqns[i] = eqn.subs({gamma_minus_one.value: gamma_minus_one})
         return eqns
 
     def create_REV_inverses(self, direction):
