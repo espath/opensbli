@@ -202,9 +202,9 @@ class iohdf5(opensbliIO):
             name = "opensbli_output"
             code += ['char %s[80];' % var_name]
             if cls.dynamic_fname:
-                code += ['sprintf(%s, \"%s_%%06d.h5\", %s);' % (var_name, name, cls.control_parameter)]
+                code += ['snprintf(%s, 80, \"%s_%%06d.h5\", %s);' % (var_name, name, cls.control_parameter)]
             else:
-                code += ['sprintf(%s, \"%s.h5\");' % (var_name, name)]
+                code += ['snprintf(%s, 80, \"%s.h5\");' % (var_name, name)]
             filename = var_name
         dataset_write = []
         if len(cls.arrays) == 0:
@@ -379,9 +379,9 @@ class iohdf5_slices(opensbliIO):
             name = '0'
             code += ['char %s[80];' % var_name]
             if cls.dynamic_fname:
-                code += ['sprintf(%s, \"%%d\", %s);' % (var_name, cls.control_parameter)]
+                code += ['snprintf(%s, 80, \"%%d\", %s);' % (var_name, cls.control_parameter)]
             else:
-                code += ['sprintf(%s, \"%s\");' % (var_name, "0")]
+                code += ['snprintf(%s, 80, \"%s\");' % (var_name, "0")]
             filename = var_name
         
 

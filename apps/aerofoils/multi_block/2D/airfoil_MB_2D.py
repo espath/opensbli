@@ -10,12 +10,12 @@ import itertools
 
 simulation_parameters = {
 # Substitute simulation parameter values
-'gama'      :   '1.4',
-'Minf'      :   '0.2',
-'Pr'        :   '0.71',
-'Re'        :   '5.0e4',
-'dt'        :   '5.0e-5',
-'niter'     :   '100000',
+'gama'      :   os.getenv('GAMMA_VALUE', '1.4'),
+'Minf'      :   os.getenv('MINF_VALUE', '0.2'),
+'Pr'        :   os.getenv('PR_VALUE', '0.71'),
+'Re'        :   os.getenv('RE_VALUE', '5.0e4'),
+'dt'        :   os.getenv('DT_VALUE', '5.0e-5'),
+'niter'     :   os.getenv('NITER_VALUE', '100000'),
 'sigma_filt'        :   '0.01',
 'SuthT'     :   '110.4',
 'RefT'      :   '273.15',
@@ -59,7 +59,7 @@ multi_block = MultiBlock(ndim, nblocks, conservative=conservative)
 SimulationDataType.set_datatype(Double)
 
 # Use shock-capturing?
-shock_capturing = False
+shock_capturing = os.getenv("ENABLE_SHOCK_CAPTURING", "0") == "1"
 
 # # Constants that are used
 constants = ["Re", "Pr", "gama", "Minf", "RefT", "SuthT"]
@@ -239,25 +239,27 @@ if shock_capturing:
             filters[no] += [WENOFilter(block, order=5, metrics=metriceq, airfoil=True, flux_type='LLF').equation_classes]
 
 # Add DRP filters for freestream
-for no, block in enumerate(multi_block.blocks):
-    filters[no] += [ExplicitFilter(block, [0,1], width=9, filter_type='DRP', optimized=False, sigma=0.33333333, airfoil=True, multi_block=multi_block).equation_classes]
+if os.getenv("ENABLE_DRP_FILTER", "1") == "1":
+    for no, block in enumerate(multi_block.blocks):
+        filters[no] += [ExplicitFilter(block, [0,1], width=9, filter_type='DRP', optimized=False, sigma=0.33333333, airfoil=True, multi_block=multi_block).equation_classes]
 
 # Add a binomial filter on the outlet boundary to kill reflections
-for no, block in enumerate(multi_block.blocks):
-    i, j = block.grid_indexes[0], block.grid_indexes[1]
-    if no == 0:
-        grid_condition = i >= 794
-        filters[no] += [BinomialFilter(block, order=6, sigma=0.8, grid_condition=grid_condition).equation_classes]
-        grid_condition = j >= 475
-        filters[no] += [BinomialFilter(block, order=6, sigma=0.8, grid_condition=grid_condition).equation_classes]
-    elif no == 1:
-        grid_condition = j >= 475
-        filters[no] += [BinomialFilter(block, order=6, sigma=0.8, grid_condition=grid_condition).equation_classes]
-    elif no == 2:
-        grid_condition = i >= 794
-        filters[no] += [BinomialFilter(block, order=6, sigma=0.8, grid_condition=grid_condition).equation_classes]
-        grid_condition = j >= 475
-        filters[no] += [BinomialFilter(block, order=6, sigma=0.8, grid_condition=grid_condition).equation_classes]
+if os.getenv("ENABLE_BINOMIAL_FILTER", "1") == "1":
+    for no, block in enumerate(multi_block.blocks):
+        i, j = block.grid_indexes[0], block.grid_indexes[1]
+        if no == 0:
+            grid_condition = i >= 794
+            filters[no] += [BinomialFilter(block, order=6, sigma=0.8, grid_condition=grid_condition).equation_classes]
+            grid_condition = j >= 475
+            filters[no] += [BinomialFilter(block, order=6, sigma=0.8, grid_condition=grid_condition).equation_classes]
+        elif no == 1:
+            grid_condition = j >= 475
+            filters[no] += [BinomialFilter(block, order=6, sigma=0.8, grid_condition=grid_condition).equation_classes]
+        elif no == 2:
+            grid_condition = i >= 794
+            filters[no] += [BinomialFilter(block, order=6, sigma=0.8, grid_condition=grid_condition).equation_classes]
+            grid_condition = j >= 475
+            filters[no] += [BinomialFilter(block, order=6, sigma=0.8, grid_condition=grid_condition).equation_classes]
 
 # # Add SFD filtering
 # for no, block in enumerate(multi_block.blocks):
@@ -318,6 +320,9 @@ SM = SimulationMonitor(arrays, indices, multi_block.get_block(2), print_frequenc
 alg = TraditionalAlgorithmRKMB(multi_block, simulation_monitor=SM)
 OPSC(alg, OPS_diagnostics=1)
 # NaN check and iteration counter
-print_iteration_ops(NaN_check='rho', every=100, nblocks=nblocks)
+if os.getenv("ENABLE_NAN_CHECK", "1") == "1":
+    print_iteration_ops(NaN_check='rho', every=100, nblocks=nblocks)
+else:
+    print_iteration_ops(every=100, nblocks=nblocks)
 # Add the simulation constants to the OPS C code
 substitute_simulation_parameters(simulation_parameters.keys(), simulation_parameters.values())
