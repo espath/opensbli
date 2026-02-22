@@ -78,7 +78,7 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 # Constants used by the dual-velocity model.
 constants = ["gama", "Pr", "Ml", "mu0", "s"]
 
-# Governing equations.
+# Governing equations are defined in opensbli/physical_models/dual_velocity_physics.py.
 DV = DualVelocitySplit(
     ndim,
     constants,
