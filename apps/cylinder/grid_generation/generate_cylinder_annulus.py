@@ -19,34 +19,24 @@ def stretch_inner_only(n, beta):
     return s**beta
 
 
-def fill_halos_linear(arr, nhalo):
-    """Linear extrapolation halos in both directions."""
-    out = np.zeros((arr.shape[0] + 2 * nhalo, arr.shape[1] + 2 * nhalo))
-    out[nhalo:-nhalo, nhalo:-nhalo] = arr
-
-    # i-direction halos
+def extend_1d_linear(values, nhalo):
+    """Linear halo extension in index space for 1D coordinates."""
+    out = np.zeros(values.size + 2 * nhalo)
+    out[nhalo:-nhalo] = values
+    d0 = values[1] - values[0]
+    d1 = values[-1] - values[-2]
     for h in range(1, nhalo + 1):
-        out[nhalo - h, nhalo:-nhalo] = out[nhalo, nhalo:-nhalo] - h * (
-            out[nhalo + 1, nhalo:-nhalo] - out[nhalo, nhalo:-nhalo]
-        )
-        out[-nhalo - 1 + h, nhalo:-nhalo] = out[-nhalo - 1, nhalo:-nhalo] + h * (
-            out[-nhalo - 1, nhalo:-nhalo] - out[-nhalo - 2, nhalo:-nhalo]
-        )
-
-    # j-direction halos
-    for h in range(1, nhalo + 1):
-        out[:, nhalo - h] = out[:, nhalo] - h * (out[:, nhalo + 1] - out[:, nhalo])
-        out[:, -nhalo - 1 + h] = out[:, -nhalo - 1] + h * (
-            out[:, -nhalo - 1] - out[:, -nhalo - 2]
-        )
-
+        out[nhalo - h] = values[0] - h * d0
+        out[-nhalo - 1 + h] = values[-1] + h * d1
     return out
 
 
 def build_annulus(nr, ntheta, r_inner, r_outer, theta0, theta1, beta_r):
     eta = stretch_inner_only(nr, beta_r)  # clustered near wall (r_inner) only
     r = r_inner + (r_outer - r_inner) * eta
-    th = np.linspace(theta0, theta1, ntheta)
+    span = theta1 - theta0
+    endpoint = not np.isclose(abs(span), 2.0 * np.pi, rtol=0.0, atol=1.0e-12)
+    th = np.linspace(theta0, theta1, ntheta, endpoint=endpoint)
 
     rr, tt = np.meshgrid(r, th, indexing="ij")
     x = rr * np.cos(tt)
@@ -54,9 +44,35 @@ def build_annulus(nr, ntheta, r_inner, r_outer, theta0, theta1, beta_r):
     return x, y
 
 
-def write_opensbli_data(output_path, x, y, nhalo):
-    xh = fill_halos_linear(x, nhalo).T
-    yh = fill_halos_linear(y, nhalo).T
+def build_annulus_with_halos(nr, ntheta, r_inner, r_outer, theta0, theta1, beta_r, nhalo):
+    """Build annulus coordinates including halos in parametric (r,theta) space."""
+    eta = stretch_inner_only(nr, beta_r)
+    r = r_inner + (r_outer - r_inner) * eta
+    span = theta1 - theta0
+    full_circle = np.isclose(abs(span), 2.0 * np.pi, rtol=0.0, atol=1.0e-12)
+    endpoint = not full_circle
+    th = np.linspace(theta0, theta1, ntheta, endpoint=endpoint)
+
+    # Radial halos: linear extension in r.
+    r_h = extend_1d_linear(r, nhalo)
+
+    # Angular halos: wrap for full circle, linear extension in theta otherwise.
+    if full_circle:
+        dth = span / ntheta
+        th_h = theta0 + dth * np.arange(-nhalo, ntheta + nhalo)
+    else:
+        th_h = extend_1d_linear(th, nhalo)
+
+    rr, tt = np.meshgrid(r_h, th_h, indexing="ij")
+    xh = rr * np.cos(tt)
+    yh = rr * np.sin(tt)
+    return xh, yh
+
+
+def write_opensbli_data(output_path, xh, yh, npoints, nhalo, transpose=False):
+    if transpose:
+        xh = xh.T
+        yh = yh.T
 
     tmp = output_path.with_suffix(".tmp.h5")
     with h5py.File(tmp, "w") as f:
@@ -67,7 +83,8 @@ def write_opensbli_data(output_path, x, y, nhalo):
     with h5py.File(tmp, "r") as f:
         arrays = [f["x0"], f["x1"]]
         array_names = ["x0", "x1"]
-        npoints = [x.shape[0], x.shape[1]]
+        if transpose:
+            npoints = [npoints[1], npoints[0]]
         halos = [(-nhalo, nhalo), (-nhalo, nhalo)]
         output_hdf5(arrays, array_names, halos, npoints, b, **{"filename": str(output_path)})
 
@@ -85,10 +102,15 @@ def main():
     parser.add_argument(
         "--beta-r",
         type=float,
-        default=2.0,
+        default=1.2,
         help="Radial clustering exponent (>1 clusters near inner wall only)",
     )
     parser.add_argument("--nhalo", type=int, default=5, help="Halo width")
+    parser.add_argument(
+        "--transpose",
+        action="store_true",
+        help="Transpose mesh arrays before writing OpenSBLI datasets.",
+    )
     parser.add_argument("--output", default="data.h5", help="Output HDF5 path")
     args = parser.parse_args()
 
@@ -97,13 +119,14 @@ def main():
     if args.theta1 <= args.theta0:
         raise ValueError("--theta1 must be > --theta0")
 
-    x, y = build_annulus(
-        args.nr, args.ntheta, args.r_inner, args.r_outer, args.theta0, args.theta1, args.beta_r
+    xh, yh = build_annulus_with_halos(
+        args.nr, args.ntheta, args.r_inner, args.r_outer, args.theta0, args.theta1, args.beta_r, args.nhalo
     )
     out = Path(args.output).resolve()
-    write_opensbli_data(out, x, y, args.nhalo)
+    write_opensbli_data(out, xh, yh, [args.nr, args.ntheta], args.nhalo, transpose=args.transpose)
     print(f"Wrote {out}")
     print(f"Interior size: ({args.nr}, {args.ntheta}), halo={args.nhalo}")
+    print(f"Transposed: {args.transpose}")
     print(f"Theta range: [{args.theta0}, {args.theta1}] rad")
 
 

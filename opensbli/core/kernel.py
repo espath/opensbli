@@ -393,6 +393,15 @@ class Kernel(object):
 
     def generate_stencil_name(self, stencil, block):
         """ Create a stencil name based on the min/max values in each direction"""
+        def encode_bound(value):
+            """Return a C-identifier-safe encoding for signed stencil bounds."""
+            iv = int(value)
+            if iv < 0:
+                return "m%d" % abs(iv)
+            elif iv > 0:
+                return "p%d" % iv
+            return "0"
+
         indices_to_process = []
         for indices in stencil:
             indices_to_process.append(list(indices))
@@ -403,8 +412,8 @@ class Kernel(object):
             indices = [x[direction] for x in indices_to_process]
             zeros = [x for x in indices if x == 0]
             nzeros += len(zeros)
-            xm, xp = abs(min(indices)), max(indices)
-            name += '_%d%d' % (xm, xp)
+            xm, xp = min(indices), max(indices)
+            name += '_%s%s' % (encode_bound(xm), encode_bound(xp))
         name += '_%d' % nzeros
         return name
 

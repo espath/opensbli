@@ -21,6 +21,11 @@ cd apps/cylinder/grid_generation
 ./run_generate_upper_half.sh --nr 241 --ntheta 361 --r-inner 0.5 --r-outer 20.0 --output data_upper_half.h5
 ```
 
+Recommended for current half-annulus solver stability:
+
+- use `beta-r=1.2` (now default in generator)
+- in solver, use `dt=5e-6` for `Ma=2.0`, `Re=2000`, `np=(241,361)`.
+
 ## Custom options
 
 You can call the base generator directly:
