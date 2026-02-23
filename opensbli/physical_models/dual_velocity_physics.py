@@ -11,9 +11,9 @@
 
       q = -kappa(ρ,θ) ∇θ,  p = R ρ θ
       jl = iota(ρ,θ) ∇ ln p,
-      S = 2 μ(ρ,θ) D^0 + ζ(ρ,θ) (tr D) I,  ζ = -2/3 μ
+      S = 2 μ(ρ,θ) D + ζ(ρ,θ) (tr D) I,  ζ = -2/3 μ
       Wl = 1/2 (∇vl - (∇vl)^T)
-      D  = 1/2 (∇vl + (∇vl)^T),  D^0 = D - 1/3 (tr D) I
+      D  = 1/2 (∇vl + (∇vl)^T)
 
     Dimensionless dual-velocity:
       ∂t ρ + Div(ρ vl) = Div(ρ jl)
@@ -27,7 +27,7 @@
       kappa(θ) = γ/((γ-1) Pr) * μ(θ)
       q = -kappa(θ) ∇θ
       jl = Ml ∇ ln p
-      S = 2 μ(θ) D^0 + ζ(θ) (tr D) I,  ζ = -2/3 μ
+      S = 2 μ(θ) D + ζ(θ) (tr D) I,  ζ = -2/3 μ
 """
 from opensbli.core.grid import GridVariable
 from opensbli.core.opensbliobjects import DataObject, ConstantObject, DataSetBase

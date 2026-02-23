@@ -11,7 +11,7 @@ PYTHON_BIN="${PYTHON_BIN:-${ROOT_DIR}/espath312/bin/python3}"
 export PYTHONPATH="${ROOT_DIR}:${PYTHONPATH:-}"
 
 # Safe short-run defaults (override from shell if needed)
-export NITER_VALUE="${NITER_VALUE:-200}"
+export NITER_VALUE="${NITER_VALUE:-2000}"
 export DT_VALUE="${DT_VALUE:-5.0e-5}"
 export ML_VALUE="${ML_VALUE:-0.4}"
 export ENABLE_SHOCK_CAPTURING="${ENABLE_SHOCK_CAPTURING:-0}"
