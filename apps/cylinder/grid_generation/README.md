@@ -33,7 +33,7 @@ Useful parameters:
 
 - `--nr`, `--ntheta`: interior resolution
 - `--r-inner`, `--r-outer`: inner and outer radius
-- `--beta-r`: radial clustering toward cylinder wall
+- `--beta-r`: radial clustering exponent (`>1` clusters near inner wall only)
 - `--nhalo`: halo width (default `5`)
 
 ## About the third (blunt-body benchmark) geometry

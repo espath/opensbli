@@ -9,13 +9,14 @@ import numpy as np
 from opensbli import SimulationBlock, output_hdf5
 
 
-def stretch_tanh(n, beta):
-    """Monotone map in [0,1] with clustering near 0 for beta>0."""
+def stretch_inner_only(n, beta):
+    """Monotone map in [0,1] with clustering only near 0 for beta>1."""
     s = np.linspace(0.0, 1.0, n)
-    if beta <= 0.0:
+    if beta <= 1.0:
         return s
-    t = np.tanh(beta * s) / np.tanh(beta)
-    return t
+    # Power-law map: eta=s**beta
+    # beta>1 => small spacing near inner wall (s=0), monotone growth outward.
+    return s**beta
 
 
 def fill_halos_linear(arr, nhalo):
@@ -43,7 +44,7 @@ def fill_halos_linear(arr, nhalo):
 
 
 def build_annulus(nr, ntheta, r_inner, r_outer, theta0, theta1, beta_r):
-    eta = stretch_tanh(nr, beta_r)  # clustered near wall (r_inner)
+    eta = stretch_inner_only(nr, beta_r)  # clustered near wall (r_inner) only
     r = r_inner + (r_outer - r_inner) * eta
     th = np.linspace(theta0, theta1, ntheta)
 
@@ -68,7 +69,7 @@ def write_opensbli_data(output_path, x, y, nhalo):
         array_names = ["x0", "x1"]
         npoints = [x.shape[0], x.shape[1]]
         halos = [(-nhalo, nhalo), (-nhalo, nhalo)]
-        output_hdf5(arrays, array_names, halos, npoints, b, **{"name": str(output_path)})
+        output_hdf5(arrays, array_names, halos, npoints, b, **{"filename": str(output_path)})
 
     tmp.unlink(missing_ok=True)
 
@@ -81,7 +82,12 @@ def main():
     parser.add_argument("--r-outer", type=float, default=20.0, help="Far-field radius")
     parser.add_argument("--theta0", type=float, default=np.pi / 2.0, help="Start angle [rad]")
     parser.add_argument("--theta1", type=float, default=np.pi, help="End angle [rad]")
-    parser.add_argument("--beta-r", type=float, default=2.5, help="Radial wall clustering")
+    parser.add_argument(
+        "--beta-r",
+        type=float,
+        default=2.0,
+        help="Radial clustering exponent (>1 clusters near inner wall only)",
+    )
     parser.add_argument("--nhalo", type=int, default=5, help="Halo width")
     parser.add_argument("--output", default="data.h5", help="Output HDF5 path")
     args = parser.parse_args()
@@ -103,4 +109,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
