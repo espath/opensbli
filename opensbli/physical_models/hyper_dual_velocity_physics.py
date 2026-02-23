@@ -29,10 +29,10 @@
      q = −kappa(ρ, θ) ∇θ,
      p = 1/(γ Ma^2) ρ θ,
      jl = (Ml/(γ Ma^2)) iota(ρ, θ) ∇p,
-     S = 2 μ(ρ, θ) D + ζ(ρ, θ) (tr D) I,
+     S = 2 μ(ρ, θ) Dl + ζ(ρ, θ) (tr D) I,
      ζ(ρ, θ) = −2/3 μ(ρ, θ),
      Wl = 1/2 (∇vl − (∇vl)^T),
-     D  = 1/2 (∇vl + (∇vl)^T).
+     Dl  = 1/2 (∇vl + (∇vl)^T).
 """
 from opensbli.core.grid import GridVariable
 from opensbli.core.opensbliobjects import DataObject, ConstantObject, DataSetBase
