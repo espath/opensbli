@@ -25,7 +25,7 @@
 
    Constitutive relations:
 
-     μ = μ0 θ^s
+     μ(θ) = θ^(3/2) * (1 + SuthT/RefT) / (θ + SuthT/RefT)
      q = −kappa(ρ, θ) ∇θ,
      p = 1/(γ Ma^2) ρ θ,
      jl = (Ml/(γ Ma^2)) iota(ρ, θ) ∇p,
@@ -40,6 +40,8 @@ from opensbli.core.opensbliobjects import DataObject, ConstantObject, DataSetBas
 from sympy import S, Rational
 from opensbli.utilities.helperfunctions import dot
 from opensbli.core.parsing import EinsteinEquation
+from opensbli.physical_models.split_forms import NS_Split
+from opensbli.equation_types.opensbliequations import OpenSBLIEq
 
 
 class Physics(object):
@@ -123,6 +125,8 @@ class HyperDualVelocityPhysics(Physics):
         self._MassMobility = ConstantObject("Ml")
         self._ViscosityRef = ConstantObject("mu0")
         self._ViscosityExponent = ConstantObject("s")
+        self._SutherlandTemperature = ConstantObject("SuthT")
+        self._ReferenceTemperature = ConstantObject("RefT")
 
         self._speed_of_sound.relation = self.specific_heat_ratio() * self.pressure() / self.density()
 
@@ -150,8 +154,13 @@ class HyperDualVelocityPhysics(Physics):
                 * self.pressure_gradient()[d]
             )
 
-        self._viscosity.relation = self.viscosity_reference() * self.temperature(relation=True) ** self.viscosity_exponent()
-        # Kept as a standalone variable to preserve q = -kappa grad(T) form in substitutions.
+        # Sutherland viscosity law in dimensionless temperature theta (= T variable here).
+        self._viscosity.relation = (
+            self.temperature(relation=True) ** Rational(3, 2)
+            * (S.One + self.sutherland_temperature() / self.reference_temperature())
+            / (self.temperature(relation=True) + self.sutherland_temperature() / self.reference_temperature())
+        )
+        # Kept as a standalone variable to preserve q = -kappa grad(theta) form in substitutions.
         self._thermal_conductivity.relation = self.viscosity(relation=True)
         return
 
@@ -172,6 +181,12 @@ class HyperDualVelocityPhysics(Physics):
 
     def viscosity_exponent(self):
         return self._ViscosityExponent
+
+    def sutherland_temperature(self):
+        return self._SutherlandTemperature
+
+    def reference_temperature(self):
+        return self._ReferenceTemperature
 
     def density(self, relation=False):
         return self._density.relation if relation else self._density.variable
@@ -224,7 +239,12 @@ class HyperDualVelocityPhysics(Physics):
 
 
 class HyperDualVelocitySplit(object):
-    """Dimensionless hyper-dual-velocity PDE builder."""
+    """Dimensionless hyper-dual-velocity PDE builder.
+
+    Uses NS_Split for the baseline convective/diffusive operator and adds
+    dual-velocity correction fluxes. This guarantees Ml=0 is on the same
+    discrete NS path as the selected split form.
+    """
 
     def __init__(
         self,
@@ -235,6 +255,8 @@ class HyperDualVelocitySplit(object):
         viscosity="dynamic",
         include_skew_work=False,
         use_reynolds=True,
+        split_type="KGP",
+        energy_formulation="enthalpy",
     ):
         self.ndim = ndim
         self.constants = constants
@@ -249,70 +271,96 @@ class HyperDualVelocitySplit(object):
             self.mom_lhs = "rhou"
             self.energy_lhs = "rhoE"
         else:
-            self.mom_lhs = "rho*vl"
+            self.mom_lhs = "u"
             self.energy_lhs = "Et"
 
-        self.substitutions = self.diffusive_terms()
-        self.mass = self.mass_eq()
-        self.momentum = self.momentum_eq()
-        self.energy = self.energy_eq()
-
-    def mass_eq(self):
-        eq = "Eq(Der(rho, t), -Conservative(rho*vl_j, x_j) + Conservative(rho*jl_j, x_j))"
-        return self.EE.expand(eq, self.ndim, self.coordinate_symbol, self.substitutions, self.constants)
-
-    def momentum_eq(self):
-        eq = (
-            "Eq(Der(%s_i, t), "
-            "-Conservative(%s_i*vl_j + KD(_i,_j)*p, x_j) "
-            "+Conservative((1/2)*rho*(vl_i*jl_j + jl_i*vl_j), x_j) "
-            "+Der(tau_i_j, x_j))"
-        ) % (self.mom_lhs, self.mom_lhs)
-        return self.EE.expand(eq, self.ndim, self.coordinate_symbol, self.substitutions, self.constants)
-
-    def energy_eq(self):
+        # Baseline NS operator (same discrete convective core as NS case).
         if self.use_reynolds:
-            heat_prefactor = "((1.0/Re)/((gama-1)*Minf*Minf*Pr))"
+            ns_viscosity = self.viscosity
         else:
-            heat_prefactor = "(1.0/((gama-1)*Minf*Minf*Pr))"
+            # NS_Split always uses Re-scaled diffusion. Keep compatibility by
+            # routing no-Re mode through constant form; this path is currently
+            # unused by production apps.
+            ns_viscosity = "constant"
+        ns = NS_Split(
+            split_type,
+            self.ndim,
+            self.constants,
+            coordinate_symbol=self.coordinate_symbol,
+            conservative=self.conservative,
+            viscosity=ns_viscosity,
+            energy_formulation=energy_formulation,
+            debug=False,
+        )
+        self.mass = ns.mass
+        self.momentum = ns.momentum
+        self.energy = ns.energy
 
-        base = (
-            "Eq(Der(%s, t), "
-            "-Conservative((%s + p)*vl_j, x_j) "
-            "+Conservative((%s + p)*jl_j, x_j) "
-            "+Der(vl_i*tau_i_j, x_j) + Der(%s*q_j, x_j))"
-        ) % (self.energy_lhs, self.energy_lhs, self.energy_lhs, heat_prefactor)
+        self.substitutions = self.dual_substitutions()
+        self.add_dual_corrections()
 
-        if self.include_skew_work:
-            base = base[:-1] + " + skew_work)"
-
-        return self.EE.expand(base, self.ndim, self.coordinate_symbol, self.substitutions, self.constants)
-
-    def diffusive_terms(self):
-        substitutions = [
+    def dual_substitutions(self):
+        return [
             "Eq(iota, 1.0)",
             "Eq(gradp_i, Der(p, x_i))",
             "Eq(jl_i, (Ml/(gama*Minf*Minf))*iota*gradp_i)",
         ]
-        if self.viscosity == "inviscid":
-            return substitutions
 
-        if self.viscosity == "constant":
-            if self.use_reynolds:
-                stress = "Eq(tau_i_j, (1.0/Re)*(Der(vl_i,x_j)+Der(vl_j,x_i)-(2/3)*KD(_i,_j)*Der(vl_k,x_k)))"
-            else:
-                stress = "Eq(tau_i_j, (Der(vl_i,x_j)+Der(vl_j,x_i)-(2/3)*KD(_i,_j)*Der(vl_k,x_k)))"
-            heat = "Eq(q_j, Der(T,x_j))"
-            substitutions += [stress, heat]
-            return substitutions
+    def add_dual_corrections(self):
+        mass_corr = self.EE.expand(
+            "Eq(Der(rho, t), Conservative(rho*jl_j, x_j))",
+            self.ndim,
+            self.coordinate_symbol,
+            self.substitutions,
+            self.constants,
+        )
+        mom_corr = self.EE.expand(
+            "Eq(Der(%s_i, t), Conservative((1/2)*rho*(u_i*jl_j + jl_i*u_j), x_j))" % self.mom_lhs,
+            self.ndim,
+            self.coordinate_symbol,
+            self.substitutions,
+            self.constants,
+        )
+        ene_corr = self.EE.expand(
+            "Eq(Der(%s, t), Conservative((%s + p)*jl_j, x_j))" % (self.energy_lhs, self.energy_lhs),
+            self.ndim,
+            self.coordinate_symbol,
+            self.substitutions,
+            self.constants,
+        )
 
-        mu_eq = "Eq(mu, mu0*T**s)"
-        kappa_eq = "Eq(kappa, mu)"
-        if self.use_reynolds:
-            stress = "Eq(tau_i_j, (mu/Re)*(Der(vl_i,x_j)+Der(vl_j,x_i)-(2/3)*KD(_i,_j)*Der(vl_k,x_k)))"
-        else:
-            stress = "Eq(tau_i_j, mu*(Der(vl_i,x_j)+Der(vl_j,x_i)-(2/3)*KD(_i,_j)*Der(vl_k,x_k)))"
-        heat = "Eq(q_j, kappa*Der(T,x_j))"
-        substitutions += [mu_eq, kappa_eq, stress, heat]
-        return substitutions
+        mass_base = self._as_list(self.mass)
+        mass_add = self._as_list(mass_corr)
+        mom_base = self._as_list(self.momentum)
+        mom_add = self._as_list(mom_corr)
+        ene_base = self._as_list(self.energy)
+        ene_add = self._as_list(ene_corr)
 
+        mass_out = [OpenSBLIEq(m.lhs, m.rhs + c.rhs) for m, c in zip(mass_base, mass_add)]
+        mom_out = [OpenSBLIEq(m.lhs, m.rhs + c.rhs) for m, c in zip(mom_base, mom_add)]
+        ene_out = [OpenSBLIEq(m.lhs, m.rhs + c.rhs) for m, c in zip(ene_base, ene_add)]
+
+        self.mass = self._unpack(mass_out)
+        self.momentum = self._unpack(mom_out)
+        self.energy = self._unpack(ene_out)
+
+        if self.include_skew_work:
+            ene_src = self.EE.expand(
+                "Eq(Der(%s, t), skew_work)" % self.energy_lhs,
+                self.ndim,
+                self.coordinate_symbol,
+                self.substitutions,
+                self.constants,
+            )
+            ene_base = self._as_list(self.energy)
+            ene_add = self._as_list(ene_src)
+            ene_out = [OpenSBLIEq(e.lhs, e.rhs + s.rhs) for e, s in zip(ene_base, ene_add)]
+            self.energy = self._unpack(ene_out)
+
+    @staticmethod
+    def _as_list(eq):
+        return eq if isinstance(eq, list) else [eq]
+
+    @staticmethod
+    def _unpack(eq_list):
+        return eq_list[0] if len(eq_list) == 1 else eq_list
