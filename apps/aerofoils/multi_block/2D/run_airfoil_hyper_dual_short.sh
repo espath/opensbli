@@ -43,8 +43,19 @@ echo "[2/3] Build opensbli_seq"
     CCFLAGS="-O3 -std=c99 -fPIC -Wall -g"
 )
 
-echo "[3/3] Run opensbli_seq"
+echo "[3/4] Run opensbli_seq"
 (
   cd "${SCRIPT_DIR}"
   ./opensbli_seq
+)
+
+echo "[4/4] Tag outputs with Ml=${ML_VALUE}"
+(
+  cd "${SCRIPT_DIR}"
+  ML_TAG="$(printf "%s" "${ML_VALUE}" | sed 's/-/m/g; s/\./p/g')"
+  shopt -s nullglob
+  for f in opensbli_output*.h5; do
+    cp -f "${f}" "${f%.h5}_ml${ML_TAG}.h5"
+  done
+  shopt -u nullglob
 )
