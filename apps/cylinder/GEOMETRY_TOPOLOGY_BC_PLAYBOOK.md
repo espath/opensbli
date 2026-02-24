@@ -41,9 +41,12 @@ Read from HDF5 metadata + array shape:
 - `size = [np0, np1]` (interior points)
 - dataset shape includes halos.
 
-For generated non-transposed annulus grids:
-- `dir0 = radial`
-- `dir1 = angular`
+For generated non-transposed annulus grids, do not assume this globally.
+Different writers/array layouts may swap index order.
+
+Example verified from `apps/cylinder/grid_generation/data_quarter.h5`:
+- `dir0` maps to angular cut lines (`theta` edges)
+- `dir1` maps to radial arcs (`r` edges)
 
 For transposed files, mapping may invert. Verify before assigning BC.
 
@@ -76,6 +79,10 @@ Current blocker:
 - angular spacing:
   - half/quarter closed span: `span/(ntheta-1)`
   - full periodic: `span/(ntheta)`
+
+Common failure mode:
+- Geometry/BC map looks correct, but `Delta0/Delta1` are assigned using the opposite
+  direction convention. This distorts metric scaling and can break symmetry/outlet behavior.
 
 ## 7) Minimum Smoke Checklist
 
