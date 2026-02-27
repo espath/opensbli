@@ -11,9 +11,10 @@ class InviscidWallBC(BoundaryConditionBase):
     :arg object scheme: Boundary scheme if required, defaults to Carpenter boundary treatment.
     :arg bool plane: True/False: Apply boundary condition to full range/split range only."""
 
-    def __init__(self, direction, side, scheme=None, plane=True):
+    def __init__(self, direction, side, scheme=None, plane=True, include_corner_halos=True):
         BoundaryConditionBase.__init__(self, direction, side, plane)
         self.bc_name = 'Symmetry'
+        self.include_corner_halos = include_corner_halos
         if not scheme:
             self.modification_scheme = Carpenter()
         else:
@@ -40,7 +41,7 @@ class InviscidWallBC(BoundaryConditionBase):
             else:
                 rhs_eqns += [ar]
                 boundary_values += [ar]
-        halos, kernel = self.generate_boundary_kernel(block, self.bc_name)
+        halos, kernel = self.generate_boundary_kernel(block, self.bc_name, corners=self.include_corner_halos)
         from_side_factor, to_side_factor = self.set_side_factor()
 
         transfer_indices = [tuple([from_side_factor*t, to_side_factor*t]) for t in range(1, abs(halos[direction][side]) + 1)]

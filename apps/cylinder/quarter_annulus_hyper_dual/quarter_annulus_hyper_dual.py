@@ -134,19 +134,24 @@ boundaries = []
 
 # dir0/side0 (theta=pi/2): pressure outlet
 back_pressure = float(os.getenv('BACK_PRESSURE_VALUE', '1.0')) / (float(os.getenv('GAMMA_VALUE', '1.4')) * float(os.getenv('MINF_VALUE', '2.0'))**2.0)
-boundaries += [PressureOutletBC(direction=0, side=0, back_pressure=back_pressure)]
+outlet_corner_halos = os.getenv('OUTLET_CORNER_HALOS', '1') == '1'
+boundaries += [PressureOutletBC(direction=0, side=0, back_pressure=back_pressure, include_corner_halos=outlet_corner_halos)]
 # dir0/side1 (theta=pi): symmetry/slip plane
-# Use InviscidWallBC (not SymmetryBC) so the boundary plane itself is set
-# to zero normal velocity, not only reflected in halo points.
-boundaries += [InviscidWallBC(direction=0, side=1)]
+symmetry_corner_halos = os.getenv('SYMMETRY_CORNER_HALOS', '1') == '1'
+boundaries += [SymmetryBC(direction=0, side=1, include_corner_halos=symmetry_corner_halos)]
 
 # dir1/side0 inner arc: isothermal no-slip wall
 gama, Minf, Twall = symbols('gama Minf Twall', **{'cls': ConstantObject})
+wall_corner_halos = os.getenv('WALL_CORNER_HALOS', '1') == '1'
 if conservative:
     wall_energy = [Eq(q_vector[-1], q_vector[0]*Twall / (gama * Minf**2.0 * (gama - S.One)))]
 else:
     wall_energy = [Eq(q_vector[-1], Twall / (gama * Minf**2.0 * (gama - S.One)))]
-boundaries += [IsothermalWallBC(direction=1, side=0, equations=wall_energy)]
+wall_bc_type = os.getenv('WALL_BC_TYPE', 'isothermal').strip().lower()
+if wall_bc_type == 'adiabatic_carpenter':
+    boundaries += [AdiabaticWall_CarpenterBC(direction=1, side=0)]
+else:
+    boundaries += [IsothermalWallBC(direction=1, side=0, equations=wall_energy, corners=wall_corner_halos)]
 
 # dir1/side1 outer arc: farfield
 boundaries += [DirichletBC(direction=1, side=1, equations=init_eq)]
@@ -176,12 +181,39 @@ SM = SimulationMonitor(
     [block.location_dataset('rho'), block.location_dataset('u0'), block.location_dataset('u1')],
     [(10, 10), (120, 120), (230, 230)],
     block,
-    print_frequency=100,
+    print_frequency=int(os.getenv('MONITOR_EVERY_VALUE', '100')),
     fp_precision=12,
     output_file='quarter_annulus_monitor.log',
 )
 
-alg = TraditionalAlgorithmRK(block, simulation_monitor=SM)
+simulation_monitor = SM
+if os.getenv('CORNER_DEBUG_MONITOR', '0') == '1':
+    debug_arrays = [
+        block.location_dataset('rho'),
+        block.location_dataset('rhou0'),
+        block.location_dataset('rhou1'),
+        block.location_dataset('rhoE'),
+        block.location_dataset('p'),
+        block.location_dataset('T'),
+    ]
+    debug_points = [(-2, -2), (-1, -1), (0, 0), (0, 1), (1, 0), (1, 1)]
+    debug_names = ['rho', 'rhou0', 'rhou1', 'rhoE', 'p', 'T']
+    debug_array_list = []
+    debug_point_list = []
+    for arr, name in zip(debug_arrays, debug_names):
+        for pt in debug_points:
+            debug_array_list.append(arr)
+            debug_point_list.append(pt)
+    simulation_monitor = SimulationMonitor(
+        debug_array_list,
+        debug_point_list,
+        block,
+        print_frequency=int(os.getenv('MONITOR_EVERY_VALUE', '100')),
+        fp_precision=12,
+        output_file='quarter_annulus_corner_debug.log',
+    )
+
+alg = TraditionalAlgorithmRK(block, simulation_monitor=simulation_monitor)
 OPSC(alg, OPS_diagnostics=1)
 if os.getenv('ENABLE_NAN_CHECK', '1') == '1':
     print_iteration_ops(NaN_check='rho', every=100, nblocks=1)

@@ -18,10 +18,11 @@ class PressureOutletBC(ModifyCentralDerivative, BoundaryConditionBase):
     :arg float back_pressure: Numerical value of back pressure to set on the outlet.
     :arg object scheme: Boundary scheme if required, defaults to Carpenter boundary treatment.
     :arg bool plane: True/False: Apply boundary condition to full range/split range only."""
-    def __init__(self, direction, side, back_pressure, scheme=None, plane=True):
+    def __init__(self, direction, side, back_pressure, scheme=None, plane=True, include_corner_halos=True):
         BoundaryConditionBase.__init__(self, direction, side, plane)
         self.bc_name = 'PressureOutlet'
         self.back_pressure = back_pressure
+        self.include_corner_halos = include_corner_halos
         if not scheme:
             self.modification_scheme = Carpenter()
         else:
@@ -29,7 +30,7 @@ class PressureOutletBC(ModifyCentralDerivative, BoundaryConditionBase):
         return
 
     def apply(self, arrays, block):
-        halos, kernel = self.generate_boundary_kernel(block, self.bc_name)
+        halos, kernel = self.generate_boundary_kernel(block, self.bc_name, corners=self.include_corner_halos)
         NS = NSphysics(block)
         cons_vars = flatten([NS.density(), NS.momentum(), NS.total_energy()])
         rhs = flatten([NS.density(), NS.momentum()])
