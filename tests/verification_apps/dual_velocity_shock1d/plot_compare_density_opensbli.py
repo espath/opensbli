@@ -31,6 +31,21 @@ def _read_dataset(group, name):
     raise RuntimeError(f"Unsupported dataset rank for {name}: {len(read_end)}")
 
 
+def _load_opensbli_density_momentum(h5_path: Path):
+    with h5py.File(h5_path, "r") as f:
+        g = f["opensbliblock00"]
+        x = np.asarray(_read_dataset(g, "x0_B0")).reshape(-1)
+        rho = np.asarray(_read_dataset(g, "rho_B0")).reshape(-1)
+        if "rhou0_B0" in g:
+            momentum = np.asarray(_read_dataset(g, "rhou0_B0")).reshape(-1)
+        elif "u0_B0" in g:
+            momentum = rho * np.asarray(_read_dataset(g, "u0_B0")).reshape(-1)
+        else:
+            raise RuntimeError("Momentum not found: expected rhou0_B0 or u0_B0 in opensbliblock00")
+    order = np.argsort(x)
+    return x[order], rho[order], momentum[order]
+
+
 def _load_opensbli_density(h5_path: Path):
     with h5py.File(h5_path, "r") as f:
         g = f["opensbliblock00"]
@@ -116,15 +131,30 @@ def main():
 
     sim_x, sim_rho = _load_opensbli_density(h5_path)
     sim_x, sim_rho_n = _normalize_center(sim_x, sim_rho)
+    sim_momentum = None
+    try:
+        sim_x_m, sim_rho_m, sim_momentum = _load_opensbli_density_momentum(h5_path)
+        sim_x_m, _ = _normalize_center(sim_x_m, sim_rho_m)
+    except RuntimeError as exc:
+        print(f"Warning: skipping momentum plot for primary file: {exc}")
+        sim_x_m = None
 
     sim2_x = None
     sim2_rho_n = None
+    sim2_x_m = None
+    sim2_momentum = None
     if args.opensbli2:
         h5_path2 = Path(args.opensbli2)
         if not h5_path2.exists():
             raise SystemExit(f"Second OpenSBLI output not found: {h5_path2}")
         sim2_x, sim2_rho = _load_opensbli_density(h5_path2)
         sim2_x, sim2_rho_n = _normalize_center(sim2_x, sim2_rho)
+        try:
+            sim2_x_m, sim2_rho_m, sim2_momentum = _load_opensbli_density_momentum(h5_path2)
+            sim2_x_m, _ = _normalize_center(sim2_x_m, sim2_rho_m)
+        except RuntimeError as exc:
+            print(f"Warning: skipping momentum plot for secondary file: {exc}")
+            sim2_x_m = None
 
     exp_x, exp_rho = _load_experiment(exp_path, args.exp_merge_eps, args.exp_bin_width)
     exp_x, exp_rho_n = _normalize_center(exp_x, exp_rho)
@@ -168,6 +198,24 @@ def main():
     fig.savefig(out_path)
     plt.close(fig)
     print(f"Saved {out_path}")
+
+    if sim_momentum is not None and sim_x_m is not None:
+        fig_m, ax_m = plt.subplots()
+        ax_m.plot(sim_x_m, sim_momentum, linewidth=1.5, label=label)
+        if sim2_x_m is not None and sim2_momentum is not None:
+            ax_m.plot(sim2_x_m, sim2_momentum, linewidth=1.5, linestyle="--", label=args.label2)
+        ax_m.set_xlabel(r"$x/\lambda$")
+        ax_m.set_ylabel(r"$\rho u$")
+        ax_m.set_title(rf"Linear momentum profile ($\mathrm{{Ma}}={args.Ma:g}$)")
+        ax_m.set_xlim(-10.0, 10.0)
+        ax_m.set_xticks(np.arange(-10.0, 10.1, 2.5))
+        ax_m.legend()
+        fig_m.tight_layout()
+
+        out_path_m = out_path.with_name(f"{out_path.stem}_momentum{out_path.suffix}")
+        fig_m.savefig(out_path_m)
+        plt.close(fig_m)
+        print(f"Saved {out_path_m}")
 
 
 if __name__ == "__main__":
