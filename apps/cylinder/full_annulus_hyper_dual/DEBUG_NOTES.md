@@ -113,3 +113,32 @@ The annulus case instability is tied to a setup mismatch between this full-ring 
 1. Re-check metric transformation inputs against direction mapping on this mesh (`Delta0/Delta1`, BC direction, periodic direction) using one consistent orientation only.
 2. Build minimal no-filter/no-SFD/no-binomial run on same mesh to isolate first instability source.
 3. If needed, temporarily reduce to half/quarter annulus where inflow/outflow placement is less ambiguous.
+
+## Additional Findings (2026-02-24, focused reruns)
+
+12. Reproduction with current default full-annulus runner (`data_full.h5`, transposed, `np=(721,241)`, `PERIODIC_DIR=0`):
+   - `NITER=8000`, `dt=1e-5` fails at iteration 100 with `NaN index (-2,0)`.
+13. Filter-off isolation (`ENABLE_WENO=0 ENABLE_SFD_FILTER=0 ENABLE_BINOMIAL_FILTER=0`):
+   - still fails at iteration 100 with `NaN index (-2,0)`.
+14. Direction toggle test (`PERIODIC_DIR=1`, filters off):
+   - still fails at iteration 100; NaN shifts to `index (0,-2)`.
+15. Wall model sensitivity test (`WALL_BC_TYPE=isothermal` vs `zero_pressure_grad`, filters off):
+   - still fails at iteration 100 (index shifts between near-seam wall halo points).
+16. Timestep sensitivity (`dt=1e-6`, filters off):
+   - still fails at iteration 100 (`index (-2,0)`), indicating this is not a simple CFL limit issue.
+17. Explicit mapping/layout stress test:
+   - transposed mesh + forced `NP0=241, NP1=721, PERIODIC_DIR=1` causes immediate `Bus error`, indicating layout/metadata incompatibility under that forced pairing.
+   - non-transposed mesh (`data_full_notrans.h5`) with `NP0=241, NP1=721, PERIODIC_DIR=1` runs but still fails at iteration 100 (`index (0,-2)`).
+
+Interpretation:
+- Instability is robust to filters, dt reduction, wall model variant, and transposed/non-transposed full-ring layout.
+- Failure remains anchored to wall/seam halo neighborhood and appears to be a corner/seam update pathology in full-annulus topology.
+18. Periodic seam corner/depth isolation (filters off, dt=1e-5, niter=200, transposed data_full.h5):
+   - `PERIODIC_CORNERS=0, PERIODIC_FULL_DEPTH=1` -> still fails at iteration 100 (`index (-2,0)`).
+   - `PERIODIC_CORNERS=1, PERIODIC_FULL_DEPTH=0` -> still fails at iteration 100 (`index (-2,0)`).
+   - Conclusion: seam corner/full-depth periodic write policy alone is not the root cause.
+
+19. Added runtime controls in `full_annulus_hyper_dual.py` for controlled BC-seam experiments:
+   - `WALL_BC_TYPE` = `zero_pressure_grad` (default) or `isothermal`
+   - `PERIODIC_CORNERS` = `0/1`
+   - `PERIODIC_FULL_DEPTH` = `0/1`
