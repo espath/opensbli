@@ -31,12 +31,27 @@ def extend_1d_linear(values, nhalo):
     return out
 
 
+def extend_1d_periodic(values, nhalo):
+    """Periodic halo extension by wrapped index copy."""
+    out = np.zeros(values.size + 2 * nhalo)
+    out[nhalo:-nhalo] = values
+    for h in range(1, nhalo + 1):
+        out[nhalo - h] = values[-h]
+        out[-nhalo - 1 + h] = values[h - 1]
+    return out
+
+
 def build_annulus(nr, ntheta, r_inner, r_outer, theta0, theta1, beta_r):
     eta = stretch_inner_only(nr, beta_r)  # clustered near wall (r_inner) only
     r = r_inner + (r_outer - r_inner) * eta
     span = theta1 - theta0
-    endpoint = not np.isclose(abs(span), 2.0 * np.pi, rtol=0.0, atol=1.0e-12)
-    th = np.linspace(theta0, theta1, ntheta, endpoint=endpoint)
+    full_circle = np.isclose(abs(span), 2.0 * np.pi, rtol=0.0, atol=1.0e-12)
+    if full_circle:
+        # Build a closed list then drop the duplicated endpoint line.
+        th_closed = np.linspace(theta0, theta1, ntheta + 1, endpoint=True)
+        th = th_closed[:-1]
+    else:
+        th = np.linspace(theta0, theta1, ntheta, endpoint=True)
 
     rr, tt = np.meshgrid(r, th, indexing="ij")
     x = rr * np.cos(tt)
@@ -50,16 +65,18 @@ def build_annulus_with_halos(nr, ntheta, r_inner, r_outer, theta0, theta1, beta_
     r = r_inner + (r_outer - r_inner) * eta
     span = theta1 - theta0
     full_circle = np.isclose(abs(span), 2.0 * np.pi, rtol=0.0, atol=1.0e-12)
-    endpoint = not full_circle
-    th = np.linspace(theta0, theta1, ntheta, endpoint=endpoint)
+    if full_circle:
+        th_closed = np.linspace(theta0, theta1, ntheta + 1, endpoint=True)
+        th = th_closed[:-1]
+    else:
+        th = np.linspace(theta0, theta1, ntheta, endpoint=True)
 
     # Radial halos: linear extension in r.
     r_h = extend_1d_linear(r, nhalo)
 
-    # Angular halos: wrap for full circle, linear extension in theta otherwise.
+    # Angular halos: wrapped-index copy for full circle, linear extension otherwise.
     if full_circle:
-        dth = span / ntheta
-        th_h = theta0 + dth * np.arange(-nhalo, ntheta + nhalo)
+        th_h = extend_1d_periodic(th, nhalo)
     else:
         th_h = extend_1d_linear(th, nhalo)
 

@@ -19,6 +19,12 @@ NP1_VALUE="${NP1_VALUE:-}"
 SAVE_EVERY_VALUE="${SAVE_EVERY_VALUE:-1000}"
 GRID_FILE="${GRID_FILE:-${GRID_DIR}/data_full.h5}"
 PERIODIC_DIR="${PERIODIC_DIR:-0}"
+VALIDATE_MESH="${VALIDATE_MESH:-1}"
+SEAM_CHECK_DEPTH="${SEAM_CHECK_DEPTH:-5}"
+SEAM_COORD_TOL="${SEAM_COORD_TOL:-1e-10}"
+SEAM_METRIC_TOL="${SEAM_METRIC_TOL:-1e-2}"
+CHECK_BC_OVERLAP="${CHECK_BC_OVERLAP:-1}"
+BC_OVERLAP_MODE="${BC_OVERLAP_MODE:-report}" # report | strict
 
 cd "${CASE_DIR}"
 
@@ -51,6 +57,16 @@ PY
   NP1_VALUE="${NP1_VALUE:-${MESH_NP1}}"
 fi
 
+if [[ "${VALIDATE_MESH}" == "1" ]]; then
+  echo "[precheck] Validate periodic seam/halo coordinates + metrics"
+  "${PYTHON_BIN}" "${GRID_DIR}/validate_periodic_annulus_mesh.py" \
+    --grid data.h5 \
+    --periodic-dir "${PERIODIC_DIR}" \
+    --max-depth "${SEAM_CHECK_DEPTH}" \
+    --coord-tol "${SEAM_COORD_TOL}" \
+    --metric-tol "${SEAM_METRIC_TOL}"
+fi
+
 echo "[1/4] Generate OpenSBLI code (Ma=${MINF_VALUE}, Ml=${ML_VALUE}, Re=${RE_VALUE}, np=(${NP0_VALUE},${NP1_VALUE}), dt=${DT_VALUE}, niter=${NITER_VALUE})"
 MINF_VALUE="${MINF_VALUE}" \
 ML_VALUE="${ML_VALUE}" \
@@ -70,6 +86,17 @@ fi
 
 echo "[2/4] Translate OPS"
 "${PYTHON_BIN}" "${ROOT_DIR}/../OPS/ops_translator_legacy/c/ops.py" opensbli.cpp
+
+if [[ "${CHECK_BC_OVERLAP}" == "1" ]]; then
+  echo "[precheck] Analyze BC/seam halo overlap in generated code"
+  "${PYTHON_BIN}" "${CASE_DIR}/check_bc_overlap.py" \
+    --ops-cpp "${CASE_DIR}/opensbli_ops.cpp" \
+    --bc-exchanges "${CASE_DIR}/bc_exchanges.h" \
+    --np0 "${NP0_VALUE}" \
+    --np1 "${NP1_VALUE}" \
+    --periodic-dir "${PERIODIC_DIR}" \
+    --mode "${BC_OVERLAP_MODE}"
+fi
 
 echo "[3/4] Build OpenSBLI_seq"
 if [[ -z "${HDF5_LIB_DIR}" ]]; then

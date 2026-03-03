@@ -344,16 +344,29 @@ class HyperDualVelocitySplit(object):
         self.energy = self._unpack(ene_out)
 
         if self.include_skew_work:
+            ene_flux = self.EE.expand(
+                "Eq(Der(%s, t), Conservative((1/2)*rho*(u_i*jl_j - u_j*jl_i)*u_j, x_i))"
+                % self.energy_lhs,
+                self.ndim,
+                self.coordinate_symbol,
+                self.substitutions,
+                self.constants,
+            )
             ene_src = self.EE.expand(
-                "Eq(Der(%s, t), skew_work)" % self.energy_lhs,
+                "Eq(Der(%s, t), -(1/4)*rho*(u_i*jl_j - u_j*jl_i)*(Der(u_i, x_j) - Der(u_j, x_i)))"
+                % self.energy_lhs,
                 self.ndim,
                 self.coordinate_symbol,
                 self.substitutions,
                 self.constants,
             )
             ene_base = self._as_list(self.energy)
-            ene_add = self._as_list(ene_src)
-            ene_out = [OpenSBLIEq(e.lhs, e.rhs + s.rhs) for e, s in zip(ene_base, ene_add)]
+            ene_add1 = self._as_list(ene_flux)
+            ene_add2 = self._as_list(ene_src)
+            ene_out = [
+                OpenSBLIEq(e.lhs, e.rhs + f.rhs + s.rhs)
+                for e, f, s in zip(ene_base, ene_add1, ene_add2)
+            ]
             self.energy = self._unpack(ene_out)
 
     @staticmethod
